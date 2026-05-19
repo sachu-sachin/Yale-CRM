@@ -27,12 +27,12 @@ Create a `.env.local` file in the root directory and add the following keys. Mak
 
 ```env
 # Supabase Database (Connection Pooling for Next.js/Prisma)
-DATABASE_URL="postgresql://postgres.riykbqkojexqqhkqvycr:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true"
-DIRECT_URL="postgresql://postgres.riykbqkojexqqhkqvycr:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
+DATABASE_URL="postgresql://postgres.[your-url]:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://postgres.[your-url]:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
 
 # Supabase Client
-NEXT_PUBLIC_SUPABASE_URL=https://riykbqkojexqqhkqvycr.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_NFqklBwTxZdvFRWT6FHslA_PCVv3J4f
+NEXT_PUBLIC_SUPABASE_URL=https://[your-url].supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=[your-key]
 
 # Auth.js
 AUTH_SECRET="dev-secret-change-in-production"
