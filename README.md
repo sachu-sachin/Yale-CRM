@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Yale IT Skill Hub - CRM Platform
 
-## Getting Started
+A full-featured Digital Marketing CRM built for **YALE IT SKILL HUB** to manage leads, track telecaller performance, and streamline communication between Admins and Telecallers.
 
-First, run the development server:
+## Tech Stack
+- **Framework:** Next.js 15 (App Router)
+- **Database:** Supabase (PostgreSQL)
+- **ORM:** Prisma
+- **Auth:** NextAuth.js (Auth.js) / Supabase Auth
+- **Styling:** Tailwind CSS + shadcn/ui
+
+---
+
+## 🚀 Getting Started
+
+Follow these steps to set up the project locally.
+
+### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+### 2. Environment Variables
+
+Create a `.env.local` file in the root directory and add the following keys. Make sure to replace `[YOUR-PASSWORD]` with your actual Supabase database password.
+
+```env
+# Supabase Database (Connection Pooling for Next.js/Prisma)
+DATABASE_URL="postgresql://postgres.riykbqkojexqqhkqvycr:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://postgres.riykbqkojexqqhkqvycr:[YOUR-PASSWORD]@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
+
+# Supabase Client
+NEXT_PUBLIC_SUPABASE_URL=https://riykbqkojexqqhkqvycr.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_NFqklBwTxZdvFRWT6FHslA_PCVv3J4f
+
+# Auth.js
+AUTH_SECRET="dev-secret-change-in-production"
+AUTH_URL="http://localhost:3000"
+```
+
+### 3. Database Setup (Prisma)
+
+Once your environment variables are configured, run the following commands to sync the database schema, generate the Prisma client, and seed the database with initial data.
+
+**Sync the schema to Supabase:**
+```bash
+npm run db:push
+```
+
+**Generate the Prisma Client:**
+```bash
+npm run db:generate
+```
+
+**Run the Seed Script (Creates demo users and leads):**
+```bash
+npm run db:seed
+```
+
+### 4. Run the Development Server
+
+Start the application:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the CRM.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🔑 Demo Credentials
 
-## Learn More
+If you ran the `db:seed` command, the following demo accounts are available for testing:
 
-To learn more about Next.js, take a look at the following resources:
+**Admin Account:**
+- **Email:** `admin@yaleitskillhub.com`
+- **Password:** `admin123`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+**Telecaller Account:**
+- **Email:** `telecaller1@yaleitskillhub.com`
+- **Password:** `tc123456`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+*(The seed script also generates 20 sample leads, sample announcements, and performance targets to help you test the application's features immediately).*
