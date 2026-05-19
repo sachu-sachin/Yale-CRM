@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(TELECALLER)
+  phone     String?
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignedLeads    Lead[]         @relation("AssignedTo")
+  createdLeads     Lead[]         @relation("CreatedBy")
+  callLogs         CallLog[]
+  targets          Target[]
+  activityLogs     ActivityLog[]
+  sentMessages     Message[]      @relation("SentMessages")
+  receivedMessages Message[]      @relation("ReceivedMessages")
+  announcements    Announcement[] @relation("AnnouncementAuthor")
+}
+
+enum Role {
+  ADMIN
+  TELECALLER
+}
+
+model Lead {
+  id              String     @id @default(cuid())
+  name            String
+  email           String?
+  phone           String
+  altPhone        String?
+  source          LeadSource
+  serviceInterest String[]
+  city            String?
+  budgetRange     String?
+  status          LeadStatus @default(NEW_ENQUIRY)
+  priority        Priority   @default(MEDIUM)
+  notes           String?
+  assignedToId    String?
+  createdById     String
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  assignedTo   User?         @relation("AssignedTo", fields: [assignedToId], references: [id])
+  createdBy    User          @relation("CreatedBy", fields: [createdById], references: [id])
+  callLogs     CallLog[]
+}
+
+enum LeadSource {
+  WEBSITE
+  WHATSAPP
+  FACEBOOK
+  INSTAGRAM
+  WALKIN
+  REFERRAL
+  GOOGLE_ADS
+  OTHER
+}
+
+enum LeadStatus {
+  NEW_ENQUIRY
+  CONTACTED
+  FOLLOW_UP
+  PROPOSAL_SENT
+  WON
+  LOST
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model CallLog {
+  id           String      @id @default(cuid())
+  leadId       String
+  telecallerId String
+  callDate     DateTime    @default(now())
+  duration     Int?
+  outcome      CallOutcome
+  notes        String?
+  followUpDate DateTime?
+  createdAt    DateTime    @default(now())
+
+  lead       Lead @relation(fields: [leadId], references: [id])
+  telecaller User @relation(fields: [telecallerId], references: [id])
+}
+
+enum CallOutcome {
+  INTERESTED
+  NOT_INTERESTED
+  CALLBACK
+  NO_ANSWER
+  WRONG_NUMBER
+  CONVERTED
+}
+
+model Target {
+  id             String   @id @default(cuid())
+  telecallerId   String
+  month          Int
+  year           Int
+  targetCalls    Int      @default(0)
+  targetConverts Int      @default(0)
+  bonusAmount    Float    @default(0.0)
+  achievedBonus  Boolean  @default(false)
+  createdBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  telecaller User @relation(fields: [telecallerId], references: [id])
+
+  @@unique([telecallerId, month, year])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  content    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("SentMessages", fields: [senderId], references: [id])
+  receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id])
+}
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  createdById String
+  createdAt   DateTime @default(now())
+
+  createdBy User @relation("AnnouncementAuthor", fields: [createdById], references: [id])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
