@@ -1,19 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Header from "@/components/layout/Header";
 import {
   Plus,
   Search,
-  Filter,
   Phone,
   Mail,
   X,
   Loader2,
-  ArrowUpDown,
   ExternalLink,
+  Info,
 } from "lucide-react";
-import { cn, leadStatusColors, leadStatusLabels, leadSourceLabels, priorityColors } from "@/lib/utils";
+import { cn, leadStatusColors, leadStatusLabels, leadSourceLabels } from "@/lib/utils";
 import Link from "next/link";
 
 interface Lead {
@@ -23,13 +22,34 @@ interface Lead {
   phone: string;
   source: string;
   status: string;
-  priority: string;
   city: string | null;
   assignedToId: string | null;
   createdAt: string;
   assignedTo: { id: string; name: string } | null;
   createdBy: { id: string; name: string };
   _count: { callLogs: number };
+}
+
+interface PhoneMatch {
+  lead: {
+    id: string;
+    name: string;
+    email: string | null;
+    phone: string;
+    altPhone: string | null;
+    source: string;
+    city: string | null;
+    budgetRange: string | null;
+    serviceInterest: string[];
+    status: string;
+    assignedToId: string | null;
+  } | null;
+  client: {
+    id: string;
+    name: string;
+    phone: string;
+    _count: { ads: number };
+  } | null;
 }
 
 interface Telecaller {
@@ -52,10 +72,12 @@ export default function AdminLeadsPage() {
     phone: "",
     source: "WEBSITE",
     city: "",
-    priority: "MEDIUM",
     notes: "",
     assignedToId: "",
   });
+  const [match, setMatch] = useState<PhoneMatch | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchLeads();
@@ -82,6 +104,47 @@ export default function AdminLeadsPage() {
     fetchLeads();
   };
 
+  // Debounced auto-fetch of an existing lead/client by phone number
+  const handlePhoneChange = (phone: string) => {
+    setForm((f) => ({ ...f, phone }));
+    setMatch(null);
+    if (lookupTimer.current) clearTimeout(lookupTimer.current);
+    if (phone.replace(/\D/g, "").length < 4) {
+      setLookupLoading(false);
+      return;
+    }
+    setLookupLoading(true);
+    lookupTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/leads/lookup?phone=${encodeURIComponent(phone)}`);
+        const data: PhoneMatch = await res.json();
+        setMatch(data.lead || data.client ? data : null);
+      } finally {
+        setLookupLoading(false);
+      }
+    }, 450);
+  };
+
+  const applyMatch = () => {
+    if (!match?.lead) return;
+    const l = match.lead;
+    setForm((f) => ({
+      ...f,
+      name: l.name,
+      email: l.email || "",
+      phone: l.phone,
+      source: l.source,
+      city: l.city || "",
+      assignedToId: l.assignedToId || "",
+    }));
+  };
+
+  const openForm = () => {
+    setForm({ name: "", email: "", phone: "", source: "WEBSITE", city: "", notes: "", assignedToId: "" });
+    setMatch(null);
+    setShowForm(true);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -92,13 +155,13 @@ export default function AdminLeadsPage() {
     });
     setSaving(false);
     setShowForm(false);
+    setMatch(null);
     setForm({
       name: "",
       email: "",
       phone: "",
       source: "WEBSITE",
       city: "",
-      priority: "MEDIUM",
       notes: "",
       assignedToId: "",
     });
@@ -164,7 +227,7 @@ export default function AdminLeadsPage() {
           </select>
 
           <button
-            onClick={() => setShowForm(true)}
+            onClick={openForm}
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-500/20"
           >
             <Plus size={18} />
@@ -182,7 +245,6 @@ export default function AdminLeadsPage() {
                   <th className="px-4 py-3 text-left font-semibold text-slate-600">Contact</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-600">Source</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-600">Status</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Priority</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-600">Assigned To</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-600">Calls</th>
                   <th className="px-4 py-3"></th>
@@ -191,13 +253,13 @@ export default function AdminLeadsPage() {
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-16 text-center">
+                    <td colSpan={7} className="px-4 py-16 text-center">
                       <Loader2 size={24} className="animate-spin text-slate-400 mx-auto" />
                     </td>
                   </tr>
                 ) : leads.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-16 text-center text-slate-400">
+                    <td colSpan={7} className="px-4 py-16 text-center text-slate-400">
                       No leads found
                     </td>
                   </tr>
@@ -244,11 +306,6 @@ export default function AdminLeadsPage() {
                         </select>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full", priorityColors[lead.priority])}>
-                          {lead.priority}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
                         <select
                           value={lead.assignedToId || ""}
                           onChange={(e) => handleAssign(lead.id, e.target.value)}
@@ -290,14 +347,37 @@ export default function AdminLeadsPage() {
               <form onSubmit={handleCreate} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Phone *</label>
+                    <div className="relative">
+                      <input type="text" value={form.phone} onChange={(e) => handlePhoneChange(e.target.value)} placeholder="Type number to auto-fill…" className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" required />
+                      {lookupLoading && <Loader2 size={16} className="animate-spin text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />}
+                    </div>
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
                     <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" required />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Phone *</label>
-                    <input type="text" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" required />
-                  </div>
                 </div>
+
+                {/* Existing record banner */}
+                {match && (match.lead || match.client) && (
+                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 animate-fade-in">
+                    <Info size={16} className="mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      {match.lead ? (
+                        <>
+                          <p>Existing lead: <strong>{match.lead.name}</strong> ({match.lead.phone}) — status {leadStatusLabels[match.lead.status] || match.lead.status}.</p>
+                          <button type="button" onClick={applyMatch} className="mt-1 font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-700">
+                            Auto-fill from this lead
+                          </button>
+                        </>
+                      ) : match.client ? (
+                        <p>This number belongs to existing client <strong>{match.client.name}</strong> ({match.client._count.ads} ad{match.client._count.ads === 1 ? "" : "s"}).</p>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
                   <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
@@ -312,28 +392,18 @@ export default function AdminLeadsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Priority</label>
-                    <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
-                      <option value="HIGH">High</option>
-                      <option value="MEDIUM">Medium</option>
-                      <option value="LOW">Low</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
                     <input type="text" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Assign To</label>
-                    <select value={form.assignedToId} onChange={(e) => setForm({ ...form, assignedToId: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
-                      <option value="">Unassigned</option>
-                      {telecallers.map((tc) => (
-                        <option key={tc.id} value={tc.id}>{tc.name}</option>
-                      ))}
-                    </select>
-                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Assign To</label>
+                  <select value={form.assignedToId} onChange={(e) => setForm({ ...form, assignedToId: e.target.value })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                    <option value="">Unassigned</option>
+                    {telecallers.map((tc) => (
+                      <option key={tc.id} value={tc.id}>{tc.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>

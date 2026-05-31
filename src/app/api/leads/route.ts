@@ -68,7 +68,6 @@ export async function POST(req: NextRequest) {
     serviceInterest,
     city,
     budgetRange,
-    priority,
     notes,
     assignedToId,
   } = body;
@@ -94,7 +93,6 @@ export async function POST(req: NextRequest) {
       serviceInterest: serviceInterest || [],
       city: city || null,
       budgetRange: budgetRange || null,
-      priority: priority || "MEDIUM",
       notes: notes || null,
       assignedToId: finalAssignedTo,
       createdById: userId,

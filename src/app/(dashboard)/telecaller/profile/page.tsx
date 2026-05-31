@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import Header from "@/components/layout/Header";
-import { User, Lock, Loader2, CheckCircle } from "lucide-react";
+import { Lock, Loader2, CheckCircle, Bell } from "lucide-react";
+import {
+  REMINDER_OPTIONS,
+  getReminderIntervalMin,
+  setReminderIntervalMin,
+} from "@/lib/reminder";
 
 export default function TelecallerProfilePage() {
   const { data: session } = useSession();
@@ -13,6 +18,16 @@ export default function TelecallerProfilePage() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
+  const [reminderMin, setReminderMin] = useState(10);
+
+  useEffect(() => {
+    setReminderMin(getReminderIntervalMin());
+  }, []);
+
+  const handleReminderChange = (min: number) => {
+    setReminderMin(min);
+    setReminderIntervalMin(min);
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -1,6 +1,6 @@
-import type { Role, LeadStatus, LeadSource, Priority, CallOutcome } from "@prisma/client";
+import type { Role, LeadStatus, LeadSource, CallOutcome, PaymentStatus, AdPhase } from "@prisma/client";
 
-export type { Role, LeadStatus, LeadSource, Priority, CallOutcome };
+export type { Role, LeadStatus, LeadSource, CallOutcome, PaymentStatus, AdPhase };
 
 export interface UserSession {
   id: string;
@@ -20,7 +20,6 @@ export interface LeadWithRelations {
   city: string | null;
   budgetRange: string | null;
   status: LeadStatus;
-  priority: Priority;
   notes: string | null;
   assignedToId: string | null;
   createdById: string;

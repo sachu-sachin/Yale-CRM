@@ -15,7 +15,7 @@ import {
   ArrowLeft,
   User,
 } from "lucide-react";
-import { cn, formatDateTime, leadStatusColors, leadStatusLabels, leadSourceLabels, priorityColors } from "@/lib/utils";
+import { cn, formatDateTime, leadStatusColors, leadStatusLabels, leadSourceLabels } from "@/lib/utils";
 import Link from "next/link";
 
 interface Lead {
@@ -29,7 +29,6 @@ interface Lead {
   city: string | null;
   budgetRange: string | null;
   status: string;
-  priority: string;
   notes: string | null;
   createdAt: string;
   assignedTo: { id: string; name: string; email: string } | null;
@@ -175,10 +174,6 @@ export default function LeadDetailPage() {
                 <div className="flex justify-between">
                   <span className="text-slate-400">Source</span>
                   <span className="font-medium">{leadSourceLabels[lead.source]}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Priority</span>
-                  <span className={cn("font-medium px-2 py-0.5 rounded-full text-xs", priorityColors[lead.priority])}>{lead.priority}</span>
                 </div>
                 {lead.assignedTo && (
                   <div className="flex justify-between">

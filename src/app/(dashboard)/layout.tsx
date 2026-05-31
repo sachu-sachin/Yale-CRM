@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/layout/Sidebar";
+import TargetReminder from "@/components/TargetReminder";
 
 export default async function DashboardLayout({
   children,
@@ -23,6 +24,7 @@ export default async function DashboardLayout({
       <main className="ml-[260px] transition-all duration-300">
         {children}
       </main>
+      <TargetReminder role={role} />
     </div>
   );
 }
