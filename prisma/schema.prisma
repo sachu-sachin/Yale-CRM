@@ -20,9 +20,6 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignedLeads    Lead[]         @relation("AssignedTo")
-  createdLeads     Lead[]         @relation("CreatedBy")
-  callLogs         CallLog[]
   targets          Target[]
   activityLogs     ActivityLog[]
   sentMessages     Message[]      @relation("SentMessages")
@@ -31,34 +28,12 @@ model User {
   clients          Client[]       @relation("ClientCreatedBy")
   createdAds       Ad[]           @relation("AdCreatedBy")
   assignedAds      Ad[]           @relation("AdAssignedTo")
+  notifications    Notification[]
 }
 
 enum Role {
   ADMIN
   TELECALLER
-}
-
-model Lead {
-  id              String     @id @default(cuid())
-  name            String
-  email           String?
-  phone           String
-  altPhone        String?
-  source          LeadSource
-  serviceInterest String[]
-  city            String?
-  budgetRange     String?
-  status          LeadStatus @default(NEW_ENQUIRY)
-  notes           String?
-  assignedToId    String?
-  createdById     String
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-
-  assignedTo User?     @relation("AssignedTo", fields: [assignedToId], references: [id])
-  createdBy  User      @relation("CreatedBy", fields: [createdById], references: [id])
-  callLogs   CallLog[]
-  ads        Ad[]
 }
 
 enum LeadSource {
@@ -70,15 +45,6 @@ enum LeadSource {
   REFERRAL
   GOOGLE_ADS
   OTHER
-}
-
-enum LeadStatus {
-  NEW_ENQUIRY
-  CONTACTED
-  FOLLOW_UP
-  PROPOSAL_SENT
-  WON
-  LOST
 }
 
 model Client {
@@ -95,37 +61,44 @@ model Client {
   ads       Ad[]
 }
 
+// "Ad" is the unified Deal: every enquiry/deal is one of these.
 model Ad {
-  id            String        @id @default(cuid())
-  clientId      String
-  leadId        String?
-  title         String
-  amount        Float         @default(0)
-  paymentStatus PaymentStatus @default(PENDING)
-  phase         AdPhase       @default(CLOSED)
-  seq           Int           @default(1)
-  closeDate     DateTime      @default(now())
-  endDate       DateTime
-  durationDays  Int?
-  notes         String?
-  assignedToId  String?
-  createdById   String
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id              String     @id @default(cuid())
+  clientId        String
+  title           String
+  amount          Float      @default(0)
+  status          DealStatus @default(NOT_CLOSED)
+  source          LeadSource @default(OTHER)
+  serviceInterest String[]
+  budgetRange     String?
+  city            String?
+  phase           AdPhase?
+  seq             Int?
+  closeDate       DateTime   @default(now())
+  endDate         DateTime?
+  durationDays    Int?
+  notes           String?
+  assignedToId    String?
+  createdById     String
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   client     Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  lead       Lead?  @relation(fields: [leadId], references: [id])
   assignedTo User?  @relation("AdAssignedTo", fields: [assignedToId], references: [id])
   createdBy  User   @relation("AdCreatedBy", fields: [createdById], references: [id])
 
   @@index([clientId])
+  @@index([status])
   @@index([phase])
 }
 
-enum PaymentStatus {
-  PENDING
-  PARTIAL
-  PAID
+enum DealStatus {
+  PAID // Conversion / Paid
+  PENDING // Waiting for payment
+  FOLLOW_UP // Follow-up
+  NOT_CLOSED // Not closed
+  REPEATED // Repeated lead (shows notes)
+  IRRELEVANT
 }
 
 enum AdPhase {
@@ -134,36 +107,12 @@ enum AdPhase {
   REGULAR
 }
 
-model CallLog {
-  id           String      @id @default(cuid())
-  leadId       String
-  telecallerId String
-  callDate     DateTime    @default(now())
-  duration     Int?
-  outcome      CallOutcome
-  notes        String?
-  followUpDate DateTime?
-  createdAt    DateTime    @default(now())
-
-  lead       Lead @relation(fields: [leadId], references: [id])
-  telecaller User @relation(fields: [telecallerId], references: [id])
-}
-
-enum CallOutcome {
-  INTERESTED
-  NOT_INTERESTED
-  CALLBACK
-  NO_ANSWER
-  WRONG_NUMBER
-  CONVERTED
-}
-
 model Target {
   id             String   @id @default(cuid())
   telecallerId   String
   month          Int
   year           Int
-  targetCalls    Int      @default(0)
+  targetLeads    Int      @default(0)
   targetConverts Int      @default(0)
   bonusAmount    Float    @default(0.0)
   achievedBonus  Boolean  @default(false)
@@ -186,6 +135,9 @@ model Message {
 
   sender   User @relation("SentMessages", fields: [senderId], references: [id])
   receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id])
+
+  @@index([senderId, receiverId])
+  @@index([receiverId, isRead])
 }
 
 model Announcement {
@@ -208,6 +160,29 @@ model ActivityLog {
   createdAt  DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType @default(GENERAL)
+  title     String
+  body      String?
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+}
+
+enum NotificationType {
+  GENERAL
+  MESSAGE
+  DEAL_ENDING
+  REMINDER
+  DEAL
 }
 
 model AppSetting {

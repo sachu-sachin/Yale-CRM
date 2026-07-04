@@ -16,44 +16,38 @@ export async function GET(req: NextRequest) {
   const year = searchParams.get("year");
 
   const where: Record<string, unknown> = {};
-
-  if (role === "TELECALLER") {
-    where.telecallerId = userId;
-  }
-
+  if (role === "TELECALLER") where.telecallerId = userId;
   if (month) where.month = parseInt(month);
   if (year) where.year = parseInt(year);
 
   const targets = await prisma.target.findMany({
     where,
-    include: {
-      telecaller: { select: { id: true, name: true, email: true } },
-    },
+    include: { telecaller: { select: { id: true, name: true, email: true } } },
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
 
-  // Enrich with actual call/conversion counts
+  // Enrich with actual lead (deal) counts + paid conversions for that month
   const enriched = await Promise.all(
     targets.map(async (target) => {
       const startDate = new Date(target.year, target.month - 1, 1);
       const endDate = new Date(target.year, target.month, 0, 23, 59, 59);
 
-      const actualCalls = await prisma.callLog.count({
+      const actualLeads = await prisma.ad.count({
         where: {
-          telecallerId: target.telecallerId,
-          callDate: { gte: startDate, lte: endDate },
+          assignedToId: target.telecallerId,
+          closeDate: { gte: startDate, lte: endDate },
         },
       });
 
-      const actualConverts = await prisma.callLog.count({
+      const actualConverts = await prisma.ad.count({
         where: {
-          telecallerId: target.telecallerId,
-          callDate: { gte: startDate, lte: endDate },
-          outcome: "CONVERTED",
+          assignedToId: target.telecallerId,
+          status: "PAID",
+          closeDate: { gte: startDate, lte: endDate },
         },
       });
 
-      return { ...target, actualCalls, actualConverts };
+      return { ...target, actualLeads, actualConverts };
     })
   );
 
@@ -68,8 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { telecallerId, month, year, targetCalls, targetConverts, bonusAmount } =
-    body;
+  const { telecallerId, month, year, targetLeads, targetConverts, bonusAmount } = body;
 
   if (!telecallerId || !month || !year) {
     return NextResponse.json(
@@ -90,19 +83,17 @@ export async function POST(req: NextRequest) {
       telecallerId,
       month: parseInt(month),
       year: parseInt(year),
-      targetCalls: targetCalls || 0,
+      targetLeads: targetLeads || 0,
       targetConverts: targetConverts || 0,
       bonusAmount: bonusAmount || 0,
       createdBy: session.user?.id as string,
     },
     update: {
-      targetCalls: targetCalls || 0,
+      targetLeads: targetLeads || 0,
       targetConverts: targetConverts || 0,
       bonusAmount: bonusAmount || 0,
     },
-    include: {
-      telecaller: { select: { id: true, name: true } },
-    },
+    include: { telecaller: { select: { id: true, name: true } } },
   });
 
   return NextResponse.json(target, { status: 201 });

@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
       role: true,
       isActive: true,
       createdAt: true,
-      _count: { select: { assignedLeads: true, callLogs: true } },
+      _count: { select: { assignedAds: true } },
     },
     orderBy: { createdAt: "desc" },
   });

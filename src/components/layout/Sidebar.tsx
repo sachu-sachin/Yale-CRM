@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   LayoutDashboard,
   Users,
-  Phone,
   Target,
   BarChart3,
   MessageSquare,
@@ -29,8 +28,7 @@ interface SidebarProps {
 
 const adminLinks = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/admin/leads", label: "All Leads", icon: Phone },
-  { href: "/admin/ads", label: "Ads & Clients", icon: Briefcase },
+  { href: "/admin/ads", label: "Deals & Clients", icon: Briefcase },
   { href: "/admin/telecallers", label: "Telecallers", icon: Users },
   { href: "/admin/targets", label: "Goals & Bonuses", icon: Target },
   { href: "/admin/chat", label: "Messages", icon: MessageSquare },
@@ -41,8 +39,7 @@ const adminLinks = [
 
 const telecallerLinks = [
   { href: "/telecaller", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/telecaller/leads", label: "My Leads", icon: Phone },
-  { href: "/telecaller/ads", label: "My Ads & Clients", icon: Briefcase },
+  { href: "/telecaller/ads", label: "My Deals", icon: Briefcase },
   { href: "/telecaller/chat", label: "Messages", icon: MessageSquare },
   { href: "/telecaller/announcements", label: "Notice Board", icon: Megaphone },
   { href: "/telecaller/profile", label: "Profile", icon: UserCircle },

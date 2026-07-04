@@ -26,7 +26,7 @@ interface Telecaller {
   phone: string | null;
   isActive: boolean;
   createdAt: string;
-  _count: { assignedLeads: number; callLogs: number };
+  _count: { assignedAds: number };
 }
 
 export default function TelecallersPage() {
@@ -248,11 +248,7 @@ export default function TelecallersPage() {
                 <div className="flex gap-4 pt-4 border-t border-slate-100">
                   <div className="flex items-center gap-1.5 text-xs text-slate-500">
                     <Phone size={12} />
-                    <span>{tc._count.assignedLeads} leads</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                    <CheckCircle2 size={12} />
-                    <span>{tc._count.callLogs} calls</span>
+                    <span>{tc._count.assignedAds} deals</span>
                   </div>
                   {tc.phone && (
                     <div className="flex items-center gap-1.5 text-xs text-slate-500">

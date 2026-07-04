@@ -1,0 +1,66 @@
+name: Deploy to Hostinger VPS
+
+# Push to main (or run manually) -> build & restart on the VPS.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two production deploys at once.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Package source
+        run: |
+          tar -czf /tmp/crm-app.tar.gz \
+            --exclude=node_modules --exclude=.next --exclude=.git \
+            --exclude='.env*' --exclude=.mcp.json --exclude=.deploy \
+            --exclude=.github --exclude=.claude --exclude=.agents \
+            --exclude=tsconfig.tsbuildinfo .
+
+      - name: Upload to VPS
+        run: |
+          scp -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+            /tmp/crm-app.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/crm-app-deploy.tar.gz"
+
+      - name: Deploy (install, migrate, build, restart)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'bash -s' <<'EOF'
+          set -e
+          APP_DIR=/root/crm-app
+          cd "$APP_DIR"
+          # Wipe tracked source so files deleted in git are removed on the server too.
+          rm -rf src .next
+          tar -xzf /root/crm-app-deploy.tar.gz -C "$APP_DIR"
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          # Additive schema sync; a destructive change will fail the deploy (safe by design).
+          npx prisma db push --skip-generate
+          npm run build
+          pm2 reload crm-app --update-env || pm2 restart crm-app --update-env
+          pm2 save
+          rm -f /root/crm-app-deploy.tar.gz
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://crm.yaleinfotech.com/login || echo 000)
+          echo "Login page returned HTTP $code"
+          test "$code" = "200"
