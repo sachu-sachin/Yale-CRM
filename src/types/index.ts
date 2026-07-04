@@ -1,6 +1,6 @@
-import type { Role, LeadStatus, LeadSource, CallOutcome, PaymentStatus, AdPhase } from "@prisma/client";
+import type { Role, LeadSource, AdPhase, DealStatus } from "@prisma/client";
 
-export type { Role, LeadStatus, LeadSource, CallOutcome, PaymentStatus, AdPhase };
+export type { Role, LeadSource, AdPhase, DealStatus };
 
 export interface UserSession {
   id: string;
@@ -9,37 +9,16 @@ export interface UserSession {
   role: Role;
 }
 
-export interface LeadWithRelations {
-  id: string;
-  name: string;
-  email: string | null;
-  phone: string;
-  altPhone: string | null;
-  source: LeadSource;
-  serviceInterest: string[];
-  city: string | null;
-  budgetRange: string | null;
-  status: LeadStatus;
-  notes: string | null;
-  assignedToId: string | null;
-  createdById: string;
-  createdAt: Date;
-  updatedAt: Date;
-  assignedTo: { id: string; name: string; email: string } | null;
-  createdBy: { id: string; name: string };
-  _count?: { callLogs: number };
-}
-
 export interface TargetWithProgress {
   id: string;
   telecallerId: string;
   month: number;
   year: number;
-  targetCalls: number;
+  targetLeads: number;
   targetConverts: number;
   bonusAmount: number;
   achievedBonus: boolean;
-  actualCalls: number;
+  actualLeads: number;
   actualConverts: number;
   telecaller: { id: string; name: string; email: string };
 }

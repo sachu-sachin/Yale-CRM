@@ -148,5 +148,16 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  // Notify the receiver
+  await prisma.notification.create({
+    data: {
+      userId: receiverId,
+      type: "MESSAGE",
+      title: `New message from ${message.sender.name}`,
+      body: content.slice(0, 90),
+      link: message.receiver.role === "ADMIN" ? "/admin/chat" : "/telecaller/chat",
+    },
+  });
+
   return NextResponse.json(message, { status: 201 });
 }

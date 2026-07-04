@@ -25,7 +25,7 @@ export async function GET(
       role: true,
       isActive: true,
       createdAt: true,
-      _count: { select: { assignedLeads: true, callLogs: true } },
+      _count: { select: { assignedAds: true } },
     },
   });
 

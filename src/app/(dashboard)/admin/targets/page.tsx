@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
-import { Target, DollarSign, Plus, Loader2, X } from "lucide-react";
+import { Target, IndianRupee, Plus, Loader2, X } from "lucide-react";
 import { cn, getInitials } from "@/lib/utils";
 
 interface Telecaller {
@@ -16,11 +16,11 @@ interface TargetData {
   telecallerId: string;
   month: number;
   year: number;
-  targetCalls: number;
+  targetLeads: number;
   targetConverts: number;
   bonusAmount: number;
   achievedBonus: boolean;
-  actualCalls: number;
+  actualLeads: number;
   actualConverts: number;
   telecaller: { id: string; name: string; email: string };
 }
@@ -41,7 +41,7 @@ export default function AdminTargetsPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     telecallerId: "",
-    targetCalls: 0,
+    targetLeads: 0,
     targetConverts: 0,
     bonusAmount: 0,
   });
@@ -73,7 +73,7 @@ export default function AdminTargetsPage() {
     });
     setSaving(false);
     setShowForm(false);
-    setForm({ telecallerId: "", targetCalls: 0, targetConverts: 0, bonusAmount: 0 });
+    setForm({ telecallerId: "", targetLeads: 0, targetConverts: 0, bonusAmount: 0 });
     fetchTargets();
   };
 
@@ -130,9 +130,9 @@ export default function AdminTargetsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
             {targets.map((t) => {
-              const callProgress = getProgress(t.actualCalls, t.targetCalls);
+              const leadProgress = getProgress(t.actualLeads, t.targetLeads);
               const convertProgress = getProgress(t.actualConverts, t.targetConverts);
-              const achieved = callProgress >= 100 && convertProgress >= 100;
+              const achieved = leadProgress >= 100 && convertProgress >= 100;
 
               return (
                 <div key={t.id} className="bg-white rounded-2xl border border-slate-100 p-5 card-hover">
@@ -156,16 +156,16 @@ export default function AdminTargetsPage() {
                   <div className="space-y-3 mb-4">
                     <div>
                       <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-500">Calls</span>
-                        <span className="font-medium text-slate-700">{t.actualCalls}/{t.targetCalls}</span>
+                        <span className="text-slate-500">Leads</span>
+                        <span className="font-medium text-slate-700">{t.actualLeads}/{t.targetLeads}</span>
                       </div>
                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                         <div
                           className={cn(
                             "h-full rounded-full transition-all duration-500",
-                            callProgress >= 100 ? "bg-emerald-500" : "bg-indigo-500"
+                            leadProgress >= 100 ? "bg-emerald-500" : "bg-indigo-500"
                           )}
-                          style={{ width: `${callProgress}%` }}
+                          style={{ width: `${leadProgress}%` }}
                         />
                       </div>
                     </div>
@@ -192,7 +192,7 @@ export default function AdminTargetsPage() {
                     achieved ? "bg-emerald-50" : "bg-slate-50"
                   )}>
                     <div className="flex items-center gap-2">
-                      <DollarSign size={16} className={achieved ? "text-emerald-600" : "text-slate-400"} />
+                      <IndianRupee size={16} className={achieved ? "text-emerald-600" : "text-slate-400"} />
                       <span className={cn("text-sm font-semibold", achieved ? "text-emerald-700" : "text-slate-600")}>
                         ₹{t.bonusAmount.toLocaleString()}
                       </span>
@@ -234,8 +234,8 @@ export default function AdminTargetsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Target Calls</label>
-                    <input type="number" min={0} value={form.targetCalls} onChange={(e) => setForm({ ...form, targetCalls: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Target Leads</label>
+                    <input type="number" min={0} value={form.targetLeads} onChange={(e) => setForm({ ...form, targetLeads: parseInt(e.target.value) || 0 })} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Target Conversions</label>

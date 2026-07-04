@@ -32,24 +32,6 @@ export function getInitials(name: string) {
     .slice(0, 2);
 }
 
-export const leadStatusColors: Record<string, string> = {
-  NEW_ENQUIRY: "bg-blue-100 text-blue-700",
-  CONTACTED: "bg-purple-100 text-purple-700",
-  FOLLOW_UP: "bg-amber-100 text-amber-700",
-  PROPOSAL_SENT: "bg-pink-100 text-pink-700",
-  WON: "bg-emerald-100 text-emerald-700",
-  LOST: "bg-red-100 text-red-700",
-};
-
-export const leadStatusLabels: Record<string, string> = {
-  NEW_ENQUIRY: "New Enquiry",
-  CONTACTED: "Contacted",
-  FOLLOW_UP: "Follow Up",
-  PROPOSAL_SENT: "Proposal Sent",
-  WON: "Won",
-  LOST: "Lost",
-};
-
 export const leadSourceLabels: Record<string, string> = {
   WEBSITE: "Website",
   WHATSAPP: "WhatsApp",
@@ -74,17 +56,47 @@ export const adPhaseColors: Record<string, string> = {
   REGULAR: "bg-indigo-100 text-indigo-700",
 };
 
-export const paymentStatusLabels: Record<string, string> = {
-  PENDING: "Pending",
-  PARTIAL: "Partial",
-  PAID: "Paid",
+// ---- Deal status (replaces lead status + payment status) ----
+export const dealStatusLabels: Record<string, string> = {
+  PAID: "Conversion / Paid",
+  PENDING: "Waiting for Payment",
+  FOLLOW_UP: "Follow-up",
+  NOT_CLOSED: "Not Closed",
+  REPEATED: "Repeated Lead",
+  IRRELEVANT: "Irrelevant",
 };
 
-export const paymentStatusColors: Record<string, string> = {
-  PENDING: "bg-red-100 text-red-700",
-  PARTIAL: "bg-amber-100 text-amber-700",
+export const dealStatusColors: Record<string, string> = {
   PAID: "bg-emerald-100 text-emerald-700",
+  PENDING: "bg-amber-100 text-amber-700",
+  FOLLOW_UP: "bg-cyan-100 text-cyan-700",
+  NOT_CLOSED: "bg-blue-100 text-blue-700",
+  REPEATED: "bg-indigo-100 text-indigo-700",
+  IRRELEVANT: "bg-slate-100 text-slate-600",
 };
+
+/**
+ * A PAID deal whose end date has passed is shown as "waiting for payment"
+ * (renewal due) — display only, the stored status stays PAID.
+ */
+export function isRenewalDue(status: string, endDate: string | Date | null): boolean {
+  if (status !== "PAID" || !endDate) return false;
+  return new Date(endDate).getTime() < Date.now();
+}
+
+// ---- Telecaller incentive (monthly, on PAID revenue) ----
+// First ₹2.5L = base salary (₹0 incentive). First full lakh above → ₹4,500.
+// Each further full lakh → ₹3,500. Partial lakhs do not count.
+export const INCENTIVE_BASE = 250000;
+export const INCENTIVE_FIRST_LAKH = 4500;
+export const INCENTIVE_NEXT_LAKH = 3500;
+
+export function calcIncentive(revenue: number): number {
+  const above = (revenue || 0) - INCENTIVE_BASE;
+  if (above < 100000) return 0;
+  const fullLakhs = Math.floor(above / 100000);
+  return INCENTIVE_FIRST_LAKH + (fullLakhs - 1) * INCENTIVE_NEXT_LAKH;
+}
 
 export function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", {
