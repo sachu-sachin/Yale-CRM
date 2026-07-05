@@ -4,13 +4,13 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import useSWR from "swr";
 import Header from "@/components/layout/Header";
 import {
-  Plus, X, Loader2, Phone, Info, Trash2, Pencil, Search, RotateCw,
+  Plus, X, Loader2, Phone, Info, Trash2, Pencil, Search, RotateCw, Clock, BellRing,
   ChevronUp, ChevronDown, ChevronsUpDown,
 } from "lucide-react";
 import {
-  cn, formatDate, formatCurrency, leadSourceLabels,
+  cn, formatDate, formatDateTime, formatCurrency, leadSourceLabels,
   dealStatusLabels, dealStatusColors, adPhaseLabels, adPhaseColors,
-  countdownColor, isRenewalDue,
+  countdownColor, isRenewalDue, allowedNextStatuses,
 } from "@/lib/utils";
 
 interface Deal {
@@ -24,11 +24,21 @@ interface Deal {
   closeDate: string;
   endDate: string | null;
   durationDays: number | null;
+  reminderDate: string | null;
+  renewedAt: string | null;
   notes: string | null;
   city: string | null;
   assignedToId: string | null;
   client: { id: string; name: string; phone: string; email: string | null; city: string | null };
   assignedTo: { id: string; name: string } | null;
+}
+
+interface StageEvent {
+  id: string;
+  fromStatus: string | null;
+  toStatus: string;
+  createdAt: string;
+  changedBy: { name: string } | null;
 }
 
 interface Telecaller { id: string; name: string; }
@@ -41,10 +51,16 @@ const TABS = [
   { key: "REGULAR", label: "Regular Clients" },
 ];
 
+const SUB_TABS: Record<string, { key: string; label: string }[]> = {
+  FOLLOWUPS: [{ key: "followup", label: "Follow-up" }, { key: "waiting", label: "Waiting for payment" }],
+  CLOSED: [{ key: "active", label: "Active" }, { key: "waiting", label: "Waiting for payment" }],
+};
+const defaultSub = (tab: string) => (tab === "FOLLOWUPS" ? "followup" : tab === "CLOSED" ? "active" : "");
+
 const emptyForm = {
   phone: "", name: "", email: "", city: "",
   title: "", amount: "", source: "WALKIN", status: "NOT_CLOSED",
-  notes: "", startDate: "", endDate: "", durationDays: "", assignedToId: "",
+  notes: "", startDate: "", endDate: "", durationDays: "", reminderDate: "", assignedToId: "",
 };
 
 function addDays(dateStr: string, n: number): string {
@@ -62,12 +78,12 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   // filters
   const [phaseTab, setPhaseTab] = useState("");
-  const [status, setStatus] = useState("");
+  const [subTab, setSubTab] = useState("");
   const [source, setSource] = useState("");
-  const [assignedTo, setAssignedTo] = useState(""); // admin: filter by telecaller
+  const [assignedTo, setAssignedTo] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [endOn, setEndOn] = useState(""); // renewal tab: ads ending on this day
+  const [endOn, setEndOn] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState("closeDate");
@@ -81,7 +97,10 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   // form
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editOrigin, setEditOrigin] = useState("NOT_CLOSED"); // status the deal was in when the popup opened
   const [renewing, setRenewing] = useState(false);
+  const [renewSourceId, setRenewSourceId] = useState<string | null>(null);
+  const [timeline, setTimeline] = useState<StageEvent[]>([]);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
   const [existing, setExisting] = useState<{ name: string; paid: number; total: number } | null>(null);
@@ -90,26 +109,26 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const isRenewal = phaseTab === "RENEWAL";
   const isFollowups = phaseTab === "FOLLOWUPS";
+  const isClosed = phaseTab === "CLOSED";
+  const hasSubTabs = isFollowups || isClosed;
 
   const dealsKey = useMemo(() => {
     const p = new URLSearchParams();
     if (isFollowups) {
-      p.set("status", "FOLLOW_UP");
+      p.set("status", subTab === "waiting" ? "PENDING" : "FOLLOW_UP");
+    } else if (isClosed) {
+      p.set("paidState", subTab === "waiting" ? "waiting" : "active");
     } else if (isRenewal) {
-      // "due for renewal" — no phase filter; handled via dueRenewal/endOn below
-    } else if (phaseTab === "CLOSED") {
-      // Closed = all paid/won deals (original + renewals), not just phase=CLOSED
-      p.set("status", "PAID");
-    } else {
-      if (phaseTab) p.set("phase", phaseTab);
-      if (status) p.set("status", status);
+      // due-for-renewal handled below via dueRenewal/endOn
+    } else if (phaseTab) {
+      p.set("phase", phaseTab); // REGULAR
     }
     if (source) p.set("source", source);
     if (isAdmin && assignedTo) p.set("assignedTo", assignedTo);
     if (isRenewal) {
       if (endOn) p.set("endOn", endOn);
       else p.set("dueRenewal", "1");
-    } else {
+    } else if (!isClosed) {
       if (from) p.set("from", from);
       if (to) p.set("to", to);
     }
@@ -117,15 +136,15 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     p.set("sortBy", sortBy);
     p.set("sortDir", sortDir);
     return `/api/ads?${p.toString()}`;
-  }, [phaseTab, isFollowups, status, source, isAdmin, assignedTo, isRenewal, endOn, from, to, debouncedSearch, sortBy, sortDir]);
+  }, [phaseTab, isFollowups, isClosed, isRenewal, subTab, source, isAdmin, assignedTo, endOn, from, to, debouncedSearch, sortBy, sortDir]);
 
   const { data: deals = [], isLoading: loading, mutate } = useSWR<Deal[]>(dealsKey);
 
   useEffect(() => {
-    if (isAdmin) {
-      fetch("/api/users?role=TELECALLER").then((r) => r.json()).then(setTelecallers).catch(() => {});
-    }
+    if (isAdmin) fetch("/api/users?role=TELECALLER").then((r) => r.json()).then(setTelecallers).catch(() => {});
   }, [isAdmin]);
+
+  const selectTab = (key: string) => { setPhaseTab(key); setSubTab(defaultSub(key)); };
 
   const toggleSort = (col: string) => {
     if (sortBy === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -153,43 +172,28 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
         const data = await res.json();
         if (data.client) {
           setExisting({ name: data.client.name, paid: data.client.paidDeals, total: data.client.totalDeals });
-          setForm((f) => ({
-            ...f,
-            name: f.name || data.client.name,
-            email: f.email || data.client.email || "",
-            city: f.city || data.client.city || "",
-          }));
+          setForm((f) => ({ ...f, name: f.name || data.client.name, email: f.email || data.client.email || "", city: f.city || data.client.city || "" }));
         }
       } finally { setLookupLoading(false); }
     }, 450);
   };
 
-  const openCreate = () => { setForm({ ...emptyForm }); setExisting(null); setEditingId(null); setRenewing(false); setShowForm(true); };
+  const openCreate = () => {
+    setForm({ ...emptyForm }); setExisting(null); setEditingId(null); setRenewing(false);
+    setRenewSourceId(null); setEditOrigin("NOT_CLOSED"); setTimeline([]); setShowForm(true);
+  };
 
-  // Renew: prefill a NEW deal from an existing one (same business/client), blank amount + new term.
   const renewFrom = (d: Deal) => {
-    setEditingId(null);
-    setExisting(null);
-    setRenewing(true);
+    setEditingId(null); setExisting(null); setRenewing(true); setRenewSourceId(d.id); setTimeline([]);
     const today = new Date().toISOString().slice(0, 10);
     setForm({
-      ...emptyForm,
-      phone: d.client.phone,
-      name: d.client.name,
-      email: d.client.email || "",
-      city: d.city || d.client.city || "",
-      title: d.title,
-      source: d.source,
-      status: "PAID",
-      assignedToId: d.assignedToId || "",
-      startDate: today,
-      durationDays: "30",
-      endDate: addDays(today, 30),
+      ...emptyForm, phone: d.client.phone, name: d.client.name, email: d.client.email || "",
+      city: d.city || d.client.city || "", title: d.title, source: d.source, status: "PAID",
+      assignedToId: d.assignedToId || "", startDate: today, durationDays: "30", endDate: addDays(today, 30),
     });
     setShowForm(true);
   };
 
-  // Auto-linked start / end / duration (changing one updates the others).
   const setStart = (v: string) => setForm((f) => {
     const nf = { ...f, startDate: v };
     if (f.durationDays && v) nf.endDate = addDays(v, parseInt(f.durationDays) || 0);
@@ -207,64 +211,77 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     return nf;
   });
 
-  const openEdit = (d: Deal) => {
-    setEditingId(d.id);
-    setExisting(null);
-    setRenewing(false);
+  const openEdit = async (d: Deal) => {
+    setEditingId(d.id); setExisting(null); setRenewing(false); setRenewSourceId(null);
+    setEditOrigin(d.status); setTimeline([]);
     setForm({
       phone: d.client.phone, name: d.client.name, email: d.client.email || "", city: d.city || d.client.city || "",
-      title: d.title, amount: String(d.amount ?? ""), source: d.source, status: d.status,
-      notes: d.notes || "",
+      title: d.title, amount: String(d.amount ?? ""), source: d.source, status: d.status, notes: d.notes || "",
       startDate: d.closeDate ? d.closeDate.slice(0, 10) : "",
       endDate: d.endDate ? d.endDate.slice(0, 10) : "",
       durationDays: d.durationDays ? String(d.durationDays) : "",
+      reminderDate: d.reminderDate ? d.reminderDate.slice(0, 10) : "",
       assignedToId: d.assignedToId || "",
     });
     setShowForm(true);
+    // load the stage timeline
+    try {
+      const res = await fetch(`/api/ads/${d.id}`);
+      if (res.ok) { const full = await res.json(); setTimeline(full.stageEvents || []); }
+    } catch { /* ignore */ }
   };
+
+  // Options for the popup status dropdown (forward-only; admin all), based on the ORIGIN status.
+  const statusOptions = useMemo(() => {
+    const base = renewing ? "PAID" : editOrigin;
+    return Array.from(new Set([base, ...allowedNextStatuses(base, isAdmin)]));
+  }, [editOrigin, isAdmin, renewing]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    // Start/End dates only apply to paid deals.
     const dates: Record<string, string> = {};
     if (form.status === "PAID") {
       if (form.startDate) dates.closeDate = form.startDate;
       if (form.endDate) dates.endDate = form.endDate;
     }
+    const reminder = form.status === "PENDING" ? { reminderDate: form.reminderDate || null } : {};
     let res: Response;
     if (editingId) {
       res = await fetch(`/api/ads/${editingId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: form.title, amount: form.amount || 0, status: form.status, source: form.source,
-          city: form.city, notes: form.notes, assignedToId: form.assignedToId, ...dates,
+          city: form.city, notes: form.notes, assignedToId: form.assignedToId, ...dates, ...reminder,
         }),
       });
     } else {
       res = await fetch("/api/ads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: form.phone, name: form.name, email: form.email, city: form.city,
           title: form.title, amount: form.amount || 0, status: form.status, source: form.source,
-          notes: form.notes, assignedToId: form.assignedToId, ...dates,
+          notes: form.notes, assignedToId: form.assignedToId, ...dates, ...reminder,
         }),
       });
     }
-    setSaving(false);
-    if (res.ok) { setShowForm(false); mutate(); }
-    else { const err = await res.json().catch(() => ({})); alert(err.error || "Could not save"); }
-  };
-
-  const quickStatus = async (id: string, newStatus: string) => {
-    mutate(deals.map((d) => (d.id === id ? { ...d, status: newStatus } : d)), { revalidate: false });
-    await fetch(`/api/ads/${id}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: newStatus }),
-    });
-    mutate();
+    if (res.ok) {
+      // On renewal, auto-resolve the old deal so it leaves the Waiting queue.
+      if (renewing && renewSourceId) {
+        const created = await res.json().catch(() => null);
+        if (created?.id) {
+          await fetch(`/api/ads/${renewSourceId}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ renewedAt: new Date().toISOString(), supersededById: created.id }),
+          });
+        }
+      }
+      setSaving(false); setShowForm(false); mutate();
+    } else {
+      setSaving(false);
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Could not save");
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -282,7 +299,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex flex-wrap gap-2">
             {TABS.map((t) => (
-              <button key={t.key} onClick={() => setPhaseTab(t.key)}
+              <button key={t.key} onClick={() => selectTab(t.key)}
                 className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-colors",
                   phaseTab === t.key
                     ? (isAdmin ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "bg-emerald-600 text-white shadow-lg shadow-emerald-500/20")
@@ -298,17 +315,26 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
           </button>
         </div>
 
-        {/* Toolbar: search + filters + date */}
+        {/* Sub-tabs */}
+        {hasSubTabs && (
+          <div className="flex gap-2 mb-4">
+            {SUB_TABS[phaseTab].map((s) => (
+              <button key={s.key} onClick={() => setSubTab(s.key)}
+                className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border",
+                  subTab === s.key ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50")}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-3 mb-6">
           <div className="relative flex-1 min-w-[220px]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search business, client, phone…"
               className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
           </div>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-2.5 rounded-xl bg-white border border-slate-200 text-sm">
-            <option value="">All Status</option>
-            {Object.entries(dealStatusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
           <select value={source} onChange={(e) => setSource(e.target.value)} className="px-3 py-2.5 rounded-xl bg-white border border-slate-200 text-sm">
             <option value="">All Sources</option>
             {Object.entries(leadSourceLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -319,14 +345,13 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
               {telecallers.map((tc) => <option key={tc.id} value={tc.id}>{tc.name}</option>)}
             </select>
           )}
-
           {isRenewal ? (
             <div className="flex items-center gap-1.5 text-sm">
               <span className="text-slate-400 text-xs">Ending on</span>
               <input type="date" value={endOn} onChange={(e) => setEndOn(e.target.value)} className="px-2 py-2 rounded-lg bg-white border border-slate-200 text-sm" />
               {endOn && <button onClick={() => setEndOn("")} className="text-xs text-slate-400 hover:text-red-500">clear</button>}
             </div>
-          ) : (
+          ) : !isClosed && (
             <div className="flex items-center gap-1.5 text-sm">
               <span className="text-slate-400 text-xs">From</span>
               <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="px-2 py-2 rounded-lg bg-white border border-slate-200 text-sm" />
@@ -351,41 +376,37 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   <SortHead col="phase" label="Phase" />
                   <SortHead col="closeDate" label="Date" />
                   <SortHead col="endDate" label="Completion" />
+                  <SortHead col="reminderDate" label="Reminder" />
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
-                  <tr><td colSpan={9} className="px-4 py-16 text-center"><Loader2 size={24} className="animate-spin text-slate-400 mx-auto" /></td></tr>
+                  <tr><td colSpan={10} className="px-4 py-16 text-center"><Loader2 size={24} className="animate-spin text-slate-400 mx-auto" /></td></tr>
                 ) : deals.length === 0 ? (
-                  <tr><td colSpan={9} className="px-4 py-16 text-center text-slate-400">No deals found.</td></tr>
+                  <tr><td colSpan={10} className="px-4 py-16 text-center text-slate-400">No deals found.</td></tr>
                 ) : (
                   deals.map((d) => {
-                    const renewalDue = isRenewalDue(d.status, d.endDate);
+                    const renewalDue = isRenewalDue(d.status, d.endDate, d.renewedAt);
                     return (
                       <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-slate-900">{d.client.name}</p>
-                        </td>
+                        <td className="px-4 py-3"><p className="font-medium text-slate-900">{d.client.name}</p></td>
                         <td className="px-4 py-3">
                           <a href={`tel:${d.client.phone}`} className="flex items-center gap-1 text-slate-600 hover:text-indigo-600"><Phone size={11} /> {d.client.phone}</a>
                         </td>
                         <td className="px-4 py-3">
                           <p className="text-slate-700">{d.title}</p>
-                          {d.notes && <p className="text-xs text-slate-400 truncate max-w-[220px]" title={d.notes}>📝 {d.notes}</p>}
+                          {d.notes && <p className="text-xs text-slate-400 truncate max-w-[200px]" title={d.notes}>📝 {d.notes}</p>}
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">{formatCurrency(d.amount)}</td>
                         <td className="px-4 py-3">
-                          {renewalDue ? (
-                            <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700" title="Term ended — renewal payment due">
-                              Waiting for Payment
-                            </span>
-                          ) : (
-                            <select value={d.status} onChange={(e) => quickStatus(d.id, e.target.value)}
-                              className={cn("text-xs font-medium px-2.5 py-1 rounded-full border-0 cursor-pointer", dealStatusColors[d.status])}>
-                              {Object.entries(dealStatusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                            </select>
-                          )}
+                          {/* Clickable badge → opens edit popup (no inline status change) */}
+                          <button onClick={() => openEdit(d)}
+                            className={cn("text-xs font-medium px-2.5 py-1 rounded-full hover:ring-2 hover:ring-offset-1 hover:ring-slate-200 transition",
+                              renewalDue ? "bg-amber-100 text-amber-700" : dealStatusColors[d.status])}
+                            title="Click to change status">
+                            {renewalDue ? "Waiting for Payment" : dealStatusLabels[d.status]}
+                          </button>
                         </td>
                         <td className="px-4 py-3">
                           {d.phase ? (
@@ -397,9 +418,12 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                         <td className="px-4 py-3 text-xs text-slate-500">{formatDate(d.closeDate)}</td>
                         <td className="px-4 py-3">
                           {d.endDate ? (
-                            <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full", countdownColor(d.endDate))}>
-                              {formatDate(d.endDate)}
-                            </span>
+                            <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full", countdownColor(d.endDate))}>{formatDate(d.endDate)}</span>
+                          ) : <span className="text-xs text-slate-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {d.reminderDate ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-slate-500"><BellRing size={11} className="text-amber-500" /> {formatDate(d.reminderDate)}</span>
                           ) : <span className="text-xs text-slate-300">—</span>}
                         </td>
                         <td className="px-4 py-3">
@@ -420,7 +444,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
           </div>
         </div>
 
-        {/* Create / Edit modal */}
+        {/* Create / Edit / Renew modal */}
         {showForm && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl w-full max-w-lg p-6 animate-scale-in shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -428,6 +452,22 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 <h2 className="text-lg font-bold text-slate-900">{renewing ? "Renew Deal" : editingId ? "Edit Deal" : "Add Deal"}</h2>
                 <button onClick={() => setShowForm(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={18} /></button>
               </div>
+
+              {/* Stage timeline (edit only) */}
+              {editingId && timeline.length > 0 && (
+                <div className="mb-5 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 mb-2"><Clock size={13} /> Stage history</p>
+                  <ol className="space-y-1.5">
+                    {timeline.map((ev) => (
+                      <li key={ev.id} className="flex items-center gap-2 text-xs">
+                        <span className={cn("px-2 py-0.5 rounded-full font-medium", dealStatusColors[ev.toStatus])}>{dealStatusLabels[ev.toStatus]}</span>
+                        <span className="text-slate-400">{formatDateTime(ev.createdAt)}{ev.changedBy ? ` · ${ev.changedBy.name}` : ""}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -518,12 +558,12 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                     <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
                     <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
-                      {Object.entries(dealStatusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      {statusOptions.map((k) => <option key={k} value={k}>{dealStatusLabels[k]}</option>)}
                     </select>
                   </div>
                 </div>
 
-                {/* Start + End date — only for Paid deals */}
+                {/* Start + End — only for Paid */}
                 {form.status === "PAID" && (
                   <div className="grid grid-cols-2 gap-4 animate-fade-in">
                     <div>
@@ -539,11 +579,21 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   </div>
                 )}
 
-                {/* Remark — for all deals */}
+                {/* Reminder — only for Waiting for payment (PENDING) */}
+                {form.status === "PENDING" && (
+                  <div className="animate-fade-in">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Payment reminder date</label>
+                    <input type="date" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                    <p className="text-xs text-slate-400 mt-1">You&apos;ll get a daily reminder from this date until it&apos;s paid.</p>
+                  </div>
+                )}
+
+                {/* Remark */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Remark</label>
                   <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2}
-                    placeholder={form.status === "REPEATED" ? "Why is this a repeated lead?" : "Add a remark / note (optional)"}
+                    placeholder="Add a remark / note (optional)"
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none" />
                 </div>
 
