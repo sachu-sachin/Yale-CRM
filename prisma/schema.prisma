@@ -25,10 +25,11 @@ model User {
   sentMessages     Message[]      @relation("SentMessages")
   receivedMessages Message[]      @relation("ReceivedMessages")
   announcements    Announcement[] @relation("AnnouncementAuthor")
-  clients          Client[]       @relation("ClientCreatedBy")
-  createdAds       Ad[]           @relation("AdCreatedBy")
-  assignedAds      Ad[]           @relation("AdAssignedTo")
+  clients          Client[]         @relation("ClientCreatedBy")
+  createdAds       Ad[]             @relation("AdCreatedBy")
+  assignedAds      Ad[]             @relation("AdAssignedTo")
   notifications    Notification[]
+  stageChanges     DealStageEvent[] @relation("StageChanges")
 }
 
 enum Role {
@@ -77,19 +78,39 @@ model Ad {
   closeDate       DateTime   @default(now())
   endDate         DateTime?
   durationDays    Int?
+  reminderDate    DateTime?
+  renewedAt       DateTime?
+  supersededById  String?
   notes           String?
   assignedToId    String?
   createdById     String
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  client     Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  assignedTo User?  @relation("AdAssignedTo", fields: [assignedToId], references: [id])
-  createdBy  User   @relation("AdCreatedBy", fields: [createdById], references: [id])
+  client       Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assignedTo   User?            @relation("AdAssignedTo", fields: [assignedToId], references: [id])
+  createdBy    User             @relation("AdCreatedBy", fields: [createdById], references: [id])
+  supersededBy Ad?              @relation("AdRenewal", fields: [supersededById], references: [id], onDelete: SetNull)
+  renewals     Ad[]             @relation("AdRenewal")
+  stageEvents  DealStageEvent[]
 
   @@index([clientId])
   @@index([status])
   @@index([phase])
+}
+
+model DealStageEvent {
+  id          String      @id @default(cuid())
+  adId        String
+  fromStatus  DealStatus?
+  toStatus    DealStatus
+  changedById String
+  createdAt   DateTime    @default(now())
+
+  ad        Ad   @relation(fields: [adId], references: [id], onDelete: Cascade)
+  changedBy User @relation("StageChanges", fields: [changedById], references: [id])
+
+  @@index([adId])
 }
 
 enum DealStatus {

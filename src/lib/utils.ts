@@ -76,12 +76,43 @@ export const dealStatusColors: Record<string, string> = {
 };
 
 /**
- * A PAID deal whose end date has passed is shown as "waiting for payment"
- * (renewal due) — display only, the stored status stays PAID.
+ * A PAID deal whose end date has passed (and hasn't been renewed) is shown as
+ * "waiting for payment" (renewal due) — display only, the stored status stays PAID.
  */
-export function isRenewalDue(status: string, endDate: string | Date | null): boolean {
-  if (status !== "PAID" || !endDate) return false;
+export function isRenewalDue(
+  status: string,
+  endDate: string | Date | null,
+  renewedAt?: string | Date | null
+): boolean {
+  if (status !== "PAID" || !endDate || renewedAt) return false;
   return new Date(endDate).getTime() < Date.now();
+}
+
+// ---- Pipeline stage machine (forward-only for telecallers; admins override) ----
+// REPEATED is intentionally omitted from the pipeline UI (dormant enum value).
+export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  NOT_CLOSED: ["FOLLOW_UP", "PENDING", "PAID", "IRRELEVANT"],
+  FOLLOW_UP: ["PENDING", "PAID"], // no Irrelevant from Follow-up
+  PENDING: ["PAID"], // admin also allows IRRELEVANT (via override)
+  PAID: [], // renew (↻) only
+  IRRELEVANT: [], // terminal
+  REPEATED: [],
+};
+
+// Statuses an admin may pick when overriding (dormant REPEATED excluded).
+const OVERRIDE_STATUSES = ["NOT_CLOSED", "FOLLOW_UP", "PENDING", "PAID", "IRRELEVANT"];
+
+/** Statuses selectable from `current` (excludes current itself). */
+export function allowedNextStatuses(current: string, isAdmin: boolean): string[] {
+  if (isAdmin) return OVERRIDE_STATUSES.filter((s) => s !== current);
+  return ALLOWED_TRANSITIONS[current] || [];
+}
+
+/** Server-side guard: is moving from→to permitted for this role? */
+export function isTransitionAllowed(from: string, to: string, isAdmin: boolean): boolean {
+  if (isAdmin) return true;
+  if (from === to) return true;
+  return (ALLOWED_TRANSITIONS[from] || []).includes(to);
 }
 
 // ---- Telecaller incentive (monthly, on PAID revenue) ----

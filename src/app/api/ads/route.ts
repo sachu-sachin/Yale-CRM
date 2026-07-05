@@ -11,9 +11,11 @@ function phaseForSeq(seq: number): AdPhase {
   return "REGULAR";
 }
 
-const SORTABLE = new Set(["closeDate", "endDate", "amount", "status", "phase", "title", "createdAt"]);
+const SORTABLE = new Set([
+  "closeDate", "endDate", "amount", "status", "phase", "title", "createdAt", "reminderDate",
+]);
 
-// GET /api/ads — list deals with filters, search, date range and sorting
+// GET /api/ads — list deals with filters, sub-tab states, search, dates and sorting
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -24,6 +26,7 @@ export async function GET(req: NextRequest) {
 
   const phase = searchParams.get("phase");
   const status = searchParams.get("status");
+  const paidState = searchParams.get("paidState"); // Closed sub-tabs: active | waiting
   const source = searchParams.get("source");
   const assignedTo = searchParams.get("assignedTo");
   const search = (searchParams.get("search") || "").trim();
@@ -35,45 +38,58 @@ export async function GET(req: NextRequest) {
   const sortDir = searchParams.get("sortDir") === "asc" ? "asc" : "desc";
 
   const where: Record<string, unknown> = {};
-  if (role === "TELECALLER") where.OR = [{ assignedToId: userId }, { createdById: userId }];
+  const and: Record<string, unknown>[] = [];
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+
+  if (role === "TELECALLER") and.push({ OR: [{ assignedToId: userId }, { createdById: userId }] });
   else if (assignedTo) where.assignedToId = assignedTo;
   if (phase) where.phase = phase;
-  if (status) where.status = status;
   if (source) where.source = source;
-  if (endOn) {
-    const start = new Date(endOn);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(endOn);
-    end.setHours(23, 59, 59, 999);
-    where.endDate = { gte: start, lte: end };
-  } else if (dueRenewal) {
-    // deals whose term ends within the next day (or already passed) → due for renewal
-    const limit = new Date();
-    limit.setDate(limit.getDate() + 1);
-    limit.setHours(23, 59, 59, 999);
+
+  if (paidState === "waiting") {
+    // Closed ▸ Waiting = paid, term expired, not yet renewed
     where.status = "PAID";
-    where.endDate = { lte: limit };
-  } else if (from || to) {
-    const range: Record<string, Date> = {};
-    if (from) range.gte = new Date(from);
-    if (to) {
-      const t = new Date(to);
-      t.setHours(23, 59, 59, 999);
-      range.lte = t;
+    where.renewedAt = null;
+    where.endDate = { lt: startToday };
+  } else if (paidState === "active") {
+    // Closed ▸ Active = paid and NOT renewal-due (future/no end, or already renewed)
+    where.status = "PAID";
+    and.push({ OR: [{ endDate: null }, { endDate: { gte: startToday } }, { renewedAt: { not: null } }] });
+  } else if (status) {
+    where.status = status;
+  }
+
+  if (!paidState) {
+    if (endOn) {
+      const s = new Date(endOn); s.setHours(0, 0, 0, 0);
+      const e = new Date(endOn); e.setHours(23, 59, 59, 999);
+      where.endDate = { gte: s, lte: e };
+    } else if (dueRenewal) {
+      const limit = new Date();
+      limit.setDate(limit.getDate() + 1);
+      limit.setHours(23, 59, 59, 999);
+      where.status = "PAID";
+      where.renewedAt = null;
+      where.endDate = { lte: limit };
+    } else if (from || to) {
+      const range: Record<string, Date> = {};
+      if (from) range.gte = new Date(from);
+      if (to) { const t = new Date(to); t.setHours(23, 59, 59, 999); range.lte = t; }
+      where.closeDate = range;
     }
-    where.closeDate = range;
   }
+
   if (search) {
-    where.AND = [
-      {
-        OR: [
-          { title: { contains: search, mode: "insensitive" } },
-          { client: { name: { contains: search, mode: "insensitive" } } },
-          { client: { phone: { contains: search } } },
-        ],
-      },
-    ];
+    and.push({
+      OR: [
+        { title: { contains: search, mode: "insensitive" } },
+        { client: { name: { contains: search, mode: "insensitive" } } },
+        { client: { phone: { contains: search } } },
+      ],
+    });
   }
+  if (and.length) where.AND = and;
 
   const orderField = SORTABLE.has(sortBy) ? sortBy : "closeDate";
 
@@ -101,22 +117,24 @@ export async function POST(req: NextRequest) {
   const {
     phone, name, email, city, title, amount, status, source,
     serviceInterest, budgetRange, closeDate, durationDays, endDate,
-    assignedToId, notes,
+    reminderDate, assignedToId, notes,
   } = body;
 
   if (!phone || !name || !title) {
     return NextResponse.json({ error: "Phone, name, and title are required" }, { status: 400 });
   }
 
-  const dealStatus = status || "NOT_CLOSED";
+  const dealStatus = (status || "NOT_CLOSED") as DealStatus;
   const close = closeDate ? new Date(closeDate) : new Date();
 
-  // Completion only relevant for paid/closed deals; optional otherwise
   let end: Date | null = endDate ? new Date(endDate) : null;
   const days = durationDays ? parseInt(String(durationDays), 10) : null;
   if (!end && days && days > 0) {
     end = new Date(close);
     end.setDate(end.getDate() + days);
+  }
+  if (dealStatus === "PAID" && end && end < close) {
+    return NextResponse.json({ error: "End date must be on or after the start date" }, { status: 400 });
   }
 
   const client = await prisma.client.upsert({
@@ -125,41 +143,46 @@ export async function POST(req: NextRequest) {
     create: { name, phone, email: email || null, city: city || null, createdById: userId },
   });
 
-  // Phase derived from the client's existing PAID deals (only paid deals progress the lifecycle)
-  let phase: AdPhase | null = null;
-  let seq: number | null = null;
-  if (dealStatus === "PAID") {
-    const paidCount = await prisma.ad.count({ where: { clientId: client.id, status: "PAID" } });
-    seq = paidCount + 1;
-    phase = phaseForSeq(seq);
-  }
-
-  const ad = await prisma.ad.create({
-    data: {
-      clientId: client.id,
-      title,
-      amount: amount != null ? parseFloat(String(amount)) : 0,
-      status: dealStatus as DealStatus,
-      source: (source || "OTHER") as LeadSource,
-      serviceInterest: serviceInterest || [],
-      budgetRange: budgetRange || null,
-      city: city || null,
-      phase,
-      seq,
-      closeDate: close,
-      endDate: end,
-      durationDays: days,
-      notes: notes || null,
-      assignedToId: role === "TELECALLER" ? userId : assignedToId || null,
-      createdById: userId,
-    },
-    include: {
-      client: { select: { id: true, name: true, phone: true } },
-      assignedTo: { select: { id: true, name: true } },
-    },
+  // Compute phase + create the deal + log the initial stage in one transaction (avoids seq races).
+  const ad = await prisma.$transaction(async (tx) => {
+    let phase: AdPhase | null = null;
+    let seq: number | null = null;
+    if (dealStatus === "PAID") {
+      const paidCount = await tx.ad.count({ where: { clientId: client.id, status: "PAID" } });
+      seq = paidCount + 1;
+      phase = phaseForSeq(seq);
+    }
+    const created = await tx.ad.create({
+      data: {
+        clientId: client.id,
+        title,
+        amount: amount != null ? parseFloat(String(amount)) : 0,
+        status: dealStatus,
+        source: (source || "OTHER") as LeadSource,
+        serviceInterest: serviceInterest || [],
+        budgetRange: budgetRange || null,
+        city: city || null,
+        phase,
+        seq,
+        closeDate: close,
+        endDate: end,
+        durationDays: days,
+        reminderDate: reminderDate ? new Date(reminderDate) : null,
+        notes: notes || null,
+        assignedToId: role === "TELECALLER" ? userId : assignedToId || null,
+        createdById: userId,
+      },
+      include: {
+        client: { select: { id: true, name: true, phone: true } },
+        assignedTo: { select: { id: true, name: true } },
+      },
+    });
+    await tx.dealStageEvent.create({
+      data: { adId: created.id, fromStatus: null, toStatus: dealStatus, changedById: userId },
+    });
+    return created;
   });
 
-  // Notify the assigned telecaller (when assigned by someone else, e.g. an admin)
   if (ad.assignedToId && ad.assignedToId !== userId) {
     await prisma.notification.create({
       data: {
