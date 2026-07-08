@@ -146,13 +146,21 @@ export async function POST(req: NextRequest) {
   // Renewal: the new deal continues the source deal's chain (next position), even if created PENDING.
   let renewalSource: { id: string; clientId: string; seq: number | null } | null = null;
   if (renewalOfId) {
-    renewalSource = await prisma.ad.findUnique({
+    const src = await prisma.ad.findUnique({
       where: { id: String(renewalOfId) },
-      select: { id: true, clientId: true, seq: true },
+      select: { id: true, clientId: true, seq: true, status: true, endDate: true, renewedAt: true },
     });
-    if (!renewalSource) {
+    if (!src) {
       return NextResponse.json({ error: "renewalOfId does not reference a valid deal." }, { status: 400 });
     }
+    // Only a due deal can be renewed — paid, not already renewed, and within 1 day of its end (or overdue).
+    // Prevents superseding a still-running deal early (which would wrongly move it to Finished).
+    const soon = new Date(); soon.setDate(soon.getDate() + 1); soon.setHours(23, 59, 59, 999);
+    const due = src.status === "PAID" && !src.renewedAt && src.endDate != null && src.endDate <= soon;
+    if (!due) {
+      return NextResponse.json({ error: "This deal isn't due for renewal yet." }, { status: 400 });
+    }
+    renewalSource = { id: src.id, clientId: src.clientId, seq: src.seq };
   }
 
   const client = await prisma.client.upsert({

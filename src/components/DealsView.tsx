@@ -449,8 +449,9 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
-                            {/* Renew only on the live (non-finished) paid deal. */}
-                            {!isFinishedSub && d.status === "PAID" && (
+                            {/* Renew only when the deal is actually due (1 day before completion / overdue),
+                                so a still-running deal can't be superseded early. */}
+                            {!isFinishedSub && renewalDue && (
                               <button onClick={() => renewFrom(d)} className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50" title="Renew (create new deal)"><RotateCw size={14} /></button>
                             )}
                             <button onClick={() => openEdit(d)} className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50" title={isFinishedSub ? "View" : "Edit"}>{isFinishedSub ? <Eye size={14} /> : <Pencil size={14} />}</button>
