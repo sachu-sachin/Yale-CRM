@@ -51,11 +51,15 @@ const TABS = [
   { key: "REGULAR", label: "Regular Clients" },
 ];
 
+// Active / Waiting-for-payment split shared by every PAID phase tab (Closed, Renewal, Regular).
+const PAID_SUBS = [{ key: "active", label: "Active" }, { key: "waiting", label: "Waiting for payment" }];
 const SUB_TABS: Record<string, { key: string; label: string }[]> = {
   FOLLOWUPS: [{ key: "followup", label: "Follow-up" }, { key: "waiting", label: "Waiting for payment" }],
-  CLOSED: [{ key: "active", label: "Active" }, { key: "waiting", label: "Waiting for payment" }],
+  CLOSED: PAID_SUBS,
+  RENEWAL: PAID_SUBS,
+  REGULAR: PAID_SUBS,
 };
-const defaultSub = (tab: string) => (tab === "FOLLOWUPS" ? "followup" : tab === "CLOSED" ? "active" : "");
+const defaultSub = (tab: string) => SUB_TABS[tab]?.[0]?.key ?? "";
 
 const emptyForm = {
   phone: "", name: "", email: "", city: "",
@@ -83,7 +87,6 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   const [assignedTo, setAssignedTo] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [endOn, setEndOn] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState("closeDate");
@@ -107,28 +110,26 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   const [lookupLoading, setLookupLoading] = useState(false);
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isRenewal = phaseTab === "RENEWAL";
   const isFollowups = phaseTab === "FOLLOWUPS";
   const isClosed = phaseTab === "CLOSED";
-  const hasSubTabs = isFollowups || isClosed;
+  const isRenewal = phaseTab === "RENEWAL";
+  const isRegular = phaseTab === "REGULAR";
+  // Closed / Renewal / Regular are PAID phase tabs, each split into Active | Waiting-for-payment.
+  const isPaidTab = isClosed || isRenewal || isRegular;
+  const hasSubTabs = isFollowups || isPaidTab;
 
   const dealsKey = useMemo(() => {
     const p = new URLSearchParams();
     if (isFollowups) {
       p.set("status", subTab === "waiting" ? "PENDING" : "FOLLOW_UP");
-    } else if (isClosed) {
+    } else if (isPaidTab) {
+      p.set("phase", phaseTab); // CLOSED | RENEWAL | REGULAR
       p.set("paidState", subTab === "waiting" ? "waiting" : "active");
-    } else if (isRenewal) {
-      // due-for-renewal handled below via dueRenewal/endOn
-    } else if (phaseTab) {
-      p.set("phase", phaseTab); // REGULAR
     }
     if (source) p.set("source", source);
     if (isAdmin && assignedTo) p.set("assignedTo", assignedTo);
-    if (isRenewal) {
-      if (endOn) p.set("endOn", endOn);
-      else p.set("dueRenewal", "1");
-    } else if (!isClosed) {
+    // Date range applies to the non-phase tabs (All Deals, Follow-ups); phase tabs use paidState instead.
+    if (!isPaidTab) {
       if (from) p.set("from", from);
       if (to) p.set("to", to);
     }
@@ -136,7 +137,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     p.set("sortBy", sortBy);
     p.set("sortDir", sortDir);
     return `/api/ads?${p.toString()}`;
-  }, [phaseTab, isFollowups, isClosed, isRenewal, subTab, source, isAdmin, assignedTo, endOn, from, to, debouncedSearch, sortBy, sortDir]);
+  }, [phaseTab, isFollowups, isPaidTab, subTab, source, isAdmin, assignedTo, from, to, debouncedSearch, sortBy, sortDir]);
 
   const { data: deals = [], isLoading: loading, mutate } = useSWR<Deal[]>(dealsKey);
 
@@ -345,13 +346,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
               {telecallers.map((tc) => <option key={tc.id} value={tc.id}>{tc.name}</option>)}
             </select>
           )}
-          {isRenewal ? (
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="text-slate-400 text-xs">Ending on</span>
-              <input type="date" value={endOn} onChange={(e) => setEndOn(e.target.value)} className="px-2 py-2 rounded-lg bg-white border border-slate-200 text-sm" />
-              {endOn && <button onClick={() => setEndOn("")} className="text-xs text-slate-400 hover:text-red-500">clear</button>}
-            </div>
-          ) : !isClosed && (
+          {!isPaidTab && (
             <div className="flex items-center gap-1.5 text-sm">
               <span className="text-slate-400 text-xs">From</span>
               <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="px-2 py-2 rounded-lg bg-white border border-slate-200 text-sm" />
