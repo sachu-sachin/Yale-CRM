@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { formatDate } from "@/lib/utils";
+import { formatDate, RENEWAL_GRACE_DAYS } from "@/lib/utils";
 
 // GET /api/notifications — list + unread count; also generate "deal ending soon" notifs idempotently.
 export async function GET() {
@@ -14,12 +14,12 @@ export async function GET() {
 
   // --- generate DAILY reminders (idempotent per day) ---
   // Nags for: pre-payment waiting (PENDING) and follow-up (FOLLOW_UP) with reminderDate reached,
-  // and renewal-due (PAID, term expired, not renewed). One per deal per day, stops once the
-  // status moves on (paid / renewed / advanced).
-  const startToday = new Date();
-  startToday.setHours(0, 0, 0, 0);
+  // and renewal-due (PAID, not renewed) from 1 day before the end date through the grace window.
+  // One per deal per day; stops once the status moves on (paid / renewed / advanced / expired).
   const endToday = new Date();
   endToday.setHours(23, 59, 59, 999);
+  const soon = new Date(); soon.setDate(soon.getDate() + 1); soon.setHours(23, 59, 59, 999);
+  const graceStart = new Date(); graceStart.setDate(graceStart.getDate() - RENEWAL_GRACE_DAYS); graceStart.setHours(0, 0, 0, 0);
   const todayStr = new Date().toISOString().slice(0, 10);
   const scope = role === "TELECALLER" ? { OR: [{ assignedToId: userId }, { createdById: userId }] } : {};
 
@@ -29,7 +29,7 @@ export async function GET() {
       include: { client: { select: { name: true } } },
     }),
     prisma.ad.findMany({
-      where: { ...scope, status: "PAID", renewedAt: null, endDate: { lt: startToday } },
+      where: { ...scope, status: "PAID", renewedAt: null, endDate: { lte: soon, gte: graceStart } },
       include: { client: { select: { name: true } } },
     }),
   ]);

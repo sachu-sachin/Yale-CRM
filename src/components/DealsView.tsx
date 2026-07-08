@@ -5,12 +5,12 @@ import useSWR from "swr";
 import Header from "@/components/layout/Header";
 import {
   Plus, X, Loader2, Phone, Info, Trash2, Pencil, Search, RotateCw, Clock, BellRing,
-  ChevronUp, ChevronDown, ChevronsUpDown,
+  ChevronUp, ChevronDown, ChevronsUpDown, Eye,
 } from "lucide-react";
 import {
   cn, formatDate, formatDateTime, formatCurrency, leadSourceLabels,
   dealStatusLabels, dealStatusColors, adPhaseLabels, adPhaseColors,
-  countdownColor, isRenewalDue, allowedNextStatuses,
+  countdownColor, isRenewalDue, isRenewalExpired, allowedNextStatuses, renewalTag, phaseForSeq,
 } from "@/lib/utils";
 
 interface Deal {
@@ -51,13 +51,17 @@ const TABS = [
   { key: "REGULAR", label: "Regular Clients" },
 ];
 
-// Active / Waiting-for-payment split shared by every PAID phase tab (Closed, Renewal, Regular).
-const PAID_SUBS = [{ key: "active", label: "Active" }, { key: "waiting", label: "Waiting for payment" }];
+// Renewal & Regular each split into Paid / Waiting-for-payment / Finished (view-only history).
+// Closed has no sub-tabs — it only holds first conversions not yet due for renewal.
+const RENEWAL_SUBS = [
+  { key: "paid", label: "Paid" },
+  { key: "waiting", label: "Waiting for payment" },
+  { key: "finished", label: "Finished" },
+];
 const SUB_TABS: Record<string, { key: string; label: string }[]> = {
   FOLLOWUPS: [{ key: "followup", label: "Follow-up" }, { key: "waiting", label: "Waiting for payment" }],
-  CLOSED: PAID_SUBS,
-  RENEWAL: PAID_SUBS,
-  REGULAR: PAID_SUBS,
+  RENEWAL: RENEWAL_SUBS,
+  REGULAR: RENEWAL_SUBS,
 };
 const defaultSub = (tab: string) => SUB_TABS[tab]?.[0]?.key ?? "";
 
@@ -101,6 +105,8 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editOrigin, setEditOrigin] = useState("NOT_CLOSED"); // status the deal was in when the popup opened
+  const [editPhase, setEditPhase] = useState<string | null>(null); // phase of the deal being edited (lifecycle?)
+  const [editFinished, setEditFinished] = useState(false); // is the edited deal superseded/expired (view-only)?
   const [renewing, setRenewing] = useState(false);
   const [renewSourceId, setRenewSourceId] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<StageEvent[]>([]);
@@ -114,21 +120,25 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   const isClosed = phaseTab === "CLOSED";
   const isRenewal = phaseTab === "RENEWAL";
   const isRegular = phaseTab === "REGULAR";
-  // Closed / Renewal / Regular are PAID phase tabs, each split into Active | Waiting-for-payment.
+  // Closed / Renewal / Regular are the lifecycle (phase) tabs; only Renewal & Regular have sub-tabs.
   const isPaidTab = isClosed || isRenewal || isRegular;
-  const hasSubTabs = isFollowups || isPaidTab;
+  const hasSubTabs = isFollowups || isRenewal || isRegular;
+  const isFinishedSub = (isRenewal || isRegular) && subTab === "finished";
 
   const dealsKey = useMemo(() => {
     const p = new URLSearchParams();
     if (isFollowups) {
-      p.set("status", subTab === "waiting" ? "PENDING" : "FOLLOW_UP");
-    } else if (isPaidTab) {
-      p.set("phase", phaseTab); // CLOSED | RENEWAL | REGULAR
-      p.set("paidState", subTab === "waiting" ? "waiting" : "active");
+      p.set("view", `followups:${subTab === "waiting" ? "waiting" : "followup"}`);
+    } else if (isClosed) {
+      p.set("view", "closed");
+    } else if (isRenewal) {
+      p.set("view", `renewal:${subTab || "paid"}`);
+    } else if (isRegular) {
+      p.set("view", `regular:${subTab || "paid"}`);
     }
     if (source) p.set("source", source);
     if (isAdmin && assignedTo) p.set("assignedTo", assignedTo);
-    // Date range applies to the non-phase tabs (All Deals, Follow-ups); phase tabs use paidState instead.
+    // Date range applies only to the non-phase tabs (All Deals, Follow-ups).
     if (!isPaidTab) {
       if (from) p.set("from", from);
       if (to) p.set("to", to);
@@ -137,7 +147,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     p.set("sortBy", sortBy);
     p.set("sortDir", sortDir);
     return `/api/ads?${p.toString()}`;
-  }, [phaseTab, isFollowups, isPaidTab, subTab, source, isAdmin, assignedTo, from, to, debouncedSearch, sortBy, sortDir]);
+  }, [isFollowups, isClosed, isRenewal, isRegular, isPaidTab, subTab, source, isAdmin, assignedTo, from, to, debouncedSearch, sortBy, sortDir]);
 
   const { data: deals = [], isLoading: loading, mutate } = useSWR<Deal[]>(dealsKey);
 
@@ -182,11 +192,13 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const openCreate = () => {
     setForm({ ...emptyForm }); setExisting(null); setEditingId(null); setRenewing(false);
-    setRenewSourceId(null); setEditOrigin("NOT_CLOSED"); setTimeline([]); setShowForm(true);
+    setRenewSourceId(null); setEditOrigin("NOT_CLOSED"); setEditPhase(null); setEditFinished(false);
+    setTimeline([]); setShowForm(true);
   };
 
   const renewFrom = (d: Deal) => {
     setEditingId(null); setExisting(null); setRenewing(true); setRenewSourceId(d.id); setTimeline([]);
+    setEditPhase(null); setEditFinished(false);
     const today = new Date().toISOString().slice(0, 10);
     setForm({
       ...emptyForm, phone: d.client.phone, name: d.client.name, email: d.client.email || "",
@@ -215,7 +227,9 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const openEdit = async (d: Deal) => {
     setEditingId(d.id); setExisting(null); setRenewing(false); setRenewSourceId(null);
-    setEditOrigin(d.status); setTimeline([]);
+    setEditOrigin(d.status); setEditPhase(d.phase);
+    setEditFinished(!!d.renewedAt || isRenewalExpired(d.status, d.endDate, d.renewedAt));
+    setTimeline([]);
     setForm({
       phone: d.client.phone, name: d.client.name, email: d.client.email || "", city: d.city || d.client.city || "",
       title: d.title, amount: String(d.amount ?? ""), source: d.source, status: d.status, notes: d.notes || "",
@@ -239,8 +253,11 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     return Array.from(new Set([base, ...allowedNextStatuses(base, isAdmin)]));
   }, [editOrigin, isAdmin, renewing]);
 
-  // A telecaller cannot change amount or start date once a deal is Paid (server enforces this too).
-  const lockPaidMoney = !isAdmin && !!editingId && editOrigin === "PAID";
+  // Telecaller editing a lifecycle (Closed/Renewal/Regular) deal: detail fields are read-only —
+  // only the remark and the guard-approved status move are allowed. Admins are never locked.
+  const lockLifecycle = !isAdmin && !!editingId && editPhase != null;
+  // A finished (superseded/expired) deal is fully view-only for telecallers.
+  const readOnly = !isAdmin && !!editingId && editFinished;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -249,9 +266,15 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
       alert("Enter a valid 10-digit mobile number.");
       return;
     }
+    // A term can't end before it starts.
+    if (form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) {
+      alert("End date must be on or after the start date.");
+      return;
+    }
     setSaving(true);
     const dates: Record<string, string> = {};
-    if (form.status === "PAID") {
+    // A renewal always carries its term dates (Paid or Waiting); normal deals only when Paid.
+    if (form.status === "PAID" || renewing) {
       if (form.startDate) dates.closeDate = form.startDate;
       if (form.endDate) dates.endDate = form.endDate;
     }
@@ -272,21 +295,14 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
         body: JSON.stringify({
           phone: form.phone, name: form.name, email: form.email, city: form.city,
           title: form.title, amount: form.amount || 0, status: form.status, source: form.source,
-          notes: form.notes, assignedToId: form.assignedToId, ...dates, ...reminder,
+          notes: form.notes, assignedToId: form.assignedToId,
+          // Renewal: server continues the chain and supersedes the source deal atomically.
+          renewalOfId: renewing ? renewSourceId : undefined,
+          ...dates, ...reminder,
         }),
       });
     }
     if (res.ok) {
-      // On renewal, auto-resolve the old deal so it leaves the Waiting queue.
-      if (renewing && renewSourceId) {
-        const created = await res.json().catch(() => null);
-        if (created?.id) {
-          await fetch(`/api/ads/${renewSourceId}`, {
-            method: "PUT", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ renewedAt: new Date().toISOString(), supersededById: created.id }),
-          });
-        }
-      }
       setSaving(false); setShowForm(false); mutate();
     } else {
       setSaving(false);
@@ -416,7 +432,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                         <td className="px-4 py-3">
                           {d.phase ? (
                             <span className={cn("text-xs font-medium px-2.5 py-1 rounded-full", adPhaseColors[d.phase])}>
-                              {adPhaseLabels[d.phase]}{d.seq && d.seq > 1 ? ` ·${d.seq}` : ""}
+                              {adPhaseLabels[d.phase]}{renewalTag(d.seq) ? ` · ${renewalTag(d.seq)}` : ""}
                             </span>
                           ) : <span className="text-xs text-slate-300">—</span>}
                         </td>
@@ -433,10 +449,11 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
-                            {d.status === "PAID" && (
+                            {/* Renew only on the live (non-finished) paid deal. */}
+                            {!isFinishedSub && d.status === "PAID" && (
                               <button onClick={() => renewFrom(d)} className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50" title="Renew (create new deal)"><RotateCw size={14} /></button>
                             )}
-                            <button onClick={() => openEdit(d)} className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50" title="Edit"><Pencil size={14} /></button>
+                            <button onClick={() => openEdit(d)} className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50" title={isFinishedSub ? "View" : "Edit"}>{isFinishedSub ? <Eye size={14} /> : <Pencil size={14} />}</button>
                             {isAdmin && <button onClick={() => handleDelete(d.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50" title="Delete"><Trash2 size={14} /></button>}
                           </div>
                         </td>
@@ -454,7 +471,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl w-full max-w-lg p-6 animate-scale-in shadow-2xl max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold text-slate-900">{renewing ? "Renew Deal" : editingId ? "Edit Deal" : "Add Deal"}</h2>
+                <h2 className="text-lg font-bold text-slate-900">{renewing ? "Renew Deal" : readOnly ? "View Deal" : editingId ? "Edit Deal" : "Add Deal"}</h2>
                 <button onClick={() => setShowForm(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={18} /></button>
               </div>
 
@@ -498,6 +515,19 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                     <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs text-slate-500">
                       Renewing <strong className="text-slate-700">{form.title}</strong> — business, source & other details are carried over.
                     </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Renewal status *</label>
+                      <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30">
+                        <option value="PAID">Paid</option>
+                        <option value="PENDING">Waiting for payment</option>
+                      </select>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {form.status === "PAID"
+                          ? "Records the renewal payment now."
+                          : "Creates a pending renewal — you'll get daily reminders until it's marked Paid."}
+                      </p>
+                    </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
@@ -529,26 +559,26 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 {existing && !editingId && (
                   <div className="flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-800 animate-fade-in">
                     <Info size={16} className="mt-0.5 shrink-0" />
-                    <p>Existing client <strong>{existing.name}</strong> — {existing.total} deal(s), {existing.paid} paid. If you mark this Paid it becomes #{existing.paid + 1} ({existing.paid === 0 ? "Closed" : existing.paid === 1 ? "Renewal" : "Regular"}).</p>
+                    <p>Existing client <strong>{existing.name}</strong> — {existing.total} deal(s), {existing.paid} paid. If you mark this Paid it becomes #{existing.paid + 1} ({adPhaseLabels[phaseForSeq(existing.paid + 1)]}).</p>
                   </div>
                 )}
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
-                  <input type="text" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })}
-                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                  <input type="text" value={form.city} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, city: e.target.value })}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Business Name *</label>
-                    <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Sharma Electronics"
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" required />
+                    <input type="text" value={form.title} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Sharma Electronics"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" required />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Source</label>
-                    <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                    <select value={form.source} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, source: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500">
                       {Object.entries(leadSourceLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
@@ -557,13 +587,13 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹)</label>
-                    <input type="number" min="0" step="any" value={form.amount} disabled={lockPaidMoney} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                    <input type="number" min="0" step="any" value={form.amount} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, amount: e.target.value })}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
-                    <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                    <select value={form.status} disabled={readOnly} onChange={(e) => setForm({ ...form, status: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500">
                       {statusOptions.map((k) => <option key={k} value={k}>{dealStatusLabels[k]}</option>)}
                     </select>
                   </div>
@@ -574,13 +604,13 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   <div className="grid grid-cols-2 gap-4 animate-fade-in">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Start date</label>
-                      <input type="date" value={form.startDate} disabled={lockPaidMoney} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                      <input type="date" value={form.startDate} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
                         className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">End date</label>
-                      <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                      <input type="date" value={form.endDate} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                     </div>
                   </div>
                 )}
@@ -591,8 +621,8 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                     <label className="block text-sm font-medium text-slate-700 mb-1">
                       {form.status === "PENDING" ? "Payment reminder date" : "Follow-up reminder date"}
                     </label>
-                    <input type="date" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                    <input type="date" value={form.reminderDate} disabled={lockLifecycle} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                     <p className="text-xs text-slate-400 mt-1">
                       {form.status === "PENDING"
                         ? "You'll get a daily reminder from this date until it's paid."
@@ -604,9 +634,9 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 {/* Remark */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Remark</label>
-                  <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2}
+                  <textarea value={form.notes} disabled={readOnly} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2}
                     placeholder="Add a remark / note (optional)"
-                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none" />
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none disabled:bg-slate-50 disabled:text-slate-500" />
                 </div>
 
                 {isAdmin && (
@@ -622,12 +652,14 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 </>)}
 
                 <div className="flex gap-3 pt-2">
-                  <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
-                  <button type="submit" disabled={saving}
-                    className={cn("flex-1 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2", isAdmin ? "bg-indigo-600 hover:bg-indigo-700" : "bg-emerald-600 hover:bg-emerald-700")}>
-                    {saving && <Loader2 size={16} className="animate-spin" />}
-                    {renewing ? "Create Renewal" : editingId ? "Save Changes" : "Save Deal"}
-                  </button>
+                  <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">{readOnly ? "Close" : "Cancel"}</button>
+                  {!readOnly && (
+                    <button type="submit" disabled={saving}
+                      className={cn("flex-1 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2", isAdmin ? "bg-indigo-600 hover:bg-indigo-700" : "bg-emerald-600 hover:bg-emerald-700")}>
+                      {saving && <Loader2 size={16} className="animate-spin" />}
+                      {renewing ? "Create Renewal" : editingId ? "Save Changes" : "Save Deal"}
+                    </button>
+                  )}
                 </div>
               </form>
             </div>

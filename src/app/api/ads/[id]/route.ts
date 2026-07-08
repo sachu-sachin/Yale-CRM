@@ -60,6 +60,10 @@ export async function PUT(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Telecallers may not edit lifecycle (Closed/Renewal/Regular) deals beyond the remark and the
+  // guard-approved status move (e.g. marking a pending renewal Paid); renewing is a separate action.
+  const lifecycleLocked = !isAdmin && existing.phase != null;
+
   const statusChanging = body.status != null && body.status !== existing.status;
   if (statusChanging && !isTransitionAllowed(existing.status, body.status, isAdmin)) {
     return NextResponse.json(
@@ -130,7 +134,21 @@ export async function PUT(
     }
   }
 
+  // A dated term can never end before it starts (this guard was missing on edit).
+  const effClose = (data.closeDate as Date | undefined) ?? existing.closeDate;
+  const effEnd = data.endDate !== undefined ? (data.endDate as Date | null) : existing.endDate;
+  if (effEnd && effClose && effEnd < effClose) {
+    return NextResponse.json({ error: "End date must be on or after the start date" }, { status: 400 });
+  }
+
   if (statusChanging) data.status = body.status;
+
+  if (lifecycleLocked) {
+    // Strip everything a telecaller isn't allowed to touch on a lifecycle deal.
+    for (const k of Object.keys(data)) {
+      if (k !== "notes" && k !== "status") delete data[k];
+    }
+  }
 
   const ad = await prisma.$transaction(async (tx) => {
     // Phase/seq computed INSIDE the transaction (avoids a seq race between concurrent PAID edits).
