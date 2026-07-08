@@ -15,6 +15,12 @@ export async function GET(
 
   const { id } = await params;
 
+  // A telecaller may only read their own record; admins may read anyone.
+  const role = (session.user as { role: string }).role;
+  if (role === "TELECALLER" && session.user?.id !== id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const user = await prisma.user.findUnique({
     where: { id },
     select: {

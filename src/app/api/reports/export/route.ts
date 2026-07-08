@@ -91,7 +91,12 @@ export async function GET(req: NextRequest) {
     }));
   } else if (type === "clients") {
     sheetName = "Clients";
+    // Telecallers only see clients they own (created, or have a deal with).
+    const clientWhere: Record<string, unknown> = isTele
+      ? { OR: [{ createdById: userId }, { ads: { some: { OR: [{ assignedToId: userId }, { createdById: userId }] } } }] }
+      : {};
     const clients = await prisma.client.findMany({
+      where: clientWhere,
       include: { _count: { select: { ads: true } }, ads: { where: { status: "PAID" }, select: { amount: true } } },
       orderBy: { createdAt: "desc" },
     });
