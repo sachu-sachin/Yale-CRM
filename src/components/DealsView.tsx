@@ -105,7 +105,6 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editOrigin, setEditOrigin] = useState("NOT_CLOSED"); // status the deal was in when the popup opened
-  const [editPhase, setEditPhase] = useState<string | null>(null); // phase of the deal being edited (lifecycle?)
   const [editFinished, setEditFinished] = useState(false); // is the edited deal superseded/expired (view-only)?
   const [renewing, setRenewing] = useState(false);
   const [renewSourceId, setRenewSourceId] = useState<string | null>(null);
@@ -192,13 +191,13 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const openCreate = () => {
     setForm({ ...emptyForm }); setExisting(null); setEditingId(null); setRenewing(false);
-    setRenewSourceId(null); setEditOrigin("NOT_CLOSED"); setEditPhase(null); setEditFinished(false);
+    setRenewSourceId(null); setEditOrigin("NOT_CLOSED"); setEditFinished(false);
     setTimeline([]); setShowForm(true);
   };
 
   const renewFrom = (d: Deal) => {
     setEditingId(null); setExisting(null); setRenewing(true); setRenewSourceId(d.id); setTimeline([]);
-    setEditPhase(null); setEditFinished(false);
+    setEditFinished(false);
     const today = new Date().toISOString().slice(0, 10);
     setForm({
       ...emptyForm, phone: d.client.phone, name: d.client.name, email: d.client.email || "",
@@ -227,7 +226,7 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const openEdit = async (d: Deal) => {
     setEditingId(d.id); setExisting(null); setRenewing(false); setRenewSourceId(null);
-    setEditOrigin(d.status); setEditPhase(d.phase);
+    setEditOrigin(d.status);
     setEditFinished(!!d.renewedAt || isRenewalExpired(d.status, d.endDate, d.renewedAt));
     setTimeline([]);
     setForm({
@@ -253,9 +252,10 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     return Array.from(new Set([base, ...allowedNextStatuses(base, isAdmin)]));
   }, [editOrigin, isAdmin, renewing]);
 
-  // Telecaller editing a lifecycle (Closed/Renewal/Regular) deal: detail fields are read-only —
-  // only the remark and the guard-approved status move are allowed. Admins are never locked.
-  const lockLifecycle = !isAdmin && !!editingId && editPhase != null;
+  // Telecaller editing a PAID deal: detail fields are read-only — only the remark is allowed
+  // (renewing is a separate action). A PENDING renewal stays editable so it can be finalized to
+  // Paid with a term. Admins are never locked.
+  const lockLifecycle = !isAdmin && !!editingId && editOrigin === "PAID";
   // A finished (superseded/expired) deal is fully view-only for telecallers.
   const readOnly = !isAdmin && !!editingId && editFinished;
 
@@ -273,8 +273,8 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     }
     setSaving(true);
     const dates: Record<string, string> = {};
-    // A renewal always carries its term dates (Paid or Waiting); normal deals only when Paid.
-    if (form.status === "PAID" || renewing) {
+    // Term dates only apply once a deal is Paid; a pending (waiting-for-payment) deal carries none.
+    if (form.status === "PAID") {
       if (form.startDate) dates.closeDate = form.startDate;
       if (form.endDate) dates.endDate = form.endDate;
     }
@@ -534,24 +534,35 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                         <input type="number" min="0" step="any" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
                           className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Duration (days)</label>
-                        <input type="number" min="1" value={form.durationDays} onChange={(e) => setDur(e.target.value)}
-                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/30" />
-                      </div>
+                      {form.status === "PAID" ? (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Duration (days)</label>
+                          <input type="number" min="1" value={form.durationDays} onChange={(e) => setDur(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/30" />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Payment reminder date *</label>
+                          <input type="date" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
+                        </div>
+                      )}
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Start date *</label>
-                        <input type="date" value={form.startDate} onChange={(e) => setStart(e.target.value)}
-                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
+                    {/* Term (start/end) is set only when the renewal is Paid; a pending renewal just needs a chase date. */}
+                    {form.status === "PAID" && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Start date *</label>
+                          <input type="date" value={form.startDate} onChange={(e) => setStart(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">End date *</label>
+                          <input type="date" value={form.endDate} onChange={(e) => setEnd(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">End date *</label>
-                        <input type="date" value={form.endDate} onChange={(e) => setEnd(e.target.value)}
-                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30" required />
-                      </div>
-                    </div>
+                    )}
                   </div>
                 )}
 

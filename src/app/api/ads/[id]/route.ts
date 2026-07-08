@@ -60,9 +60,9 @@ export async function PUT(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Telecallers may not edit lifecycle (Closed/Renewal/Regular) deals beyond the remark and the
-  // guard-approved status move (e.g. marking a pending renewal Paid); renewing is a separate action.
-  const lifecycleLocked = !isAdmin && existing.phase != null;
+  // Telecallers may not edit a PAID deal beyond the remark (renewing is a separate action). A PENDING
+  // deal — including a pending renewal — stays editable so it can be finalized to Paid with a term.
+  const lifecycleLocked = !isAdmin && existing.status === "PAID";
 
   const statusChanging = body.status != null && body.status !== existing.status;
   if (statusChanging && !isTransitionAllowed(existing.status, body.status, isAdmin)) {
