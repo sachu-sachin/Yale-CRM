@@ -13,8 +13,9 @@ export async function GET() {
   const adsPath = role === "ADMIN" ? "/admin/ads" : "/telecaller/ads";
 
   // --- generate DAILY reminders (idempotent per day) ---
-  // Nags for: pre-payment waiting (PENDING with reminderDate reached) and
-  // renewal-due (PAID, term expired, not renewed). One per deal per day, stops once paid/renewed.
+  // Nags for: pre-payment waiting (PENDING) and follow-up (FOLLOW_UP) with reminderDate reached,
+  // and renewal-due (PAID, term expired, not renewed). One per deal per day, stops once the
+  // status moves on (paid / renewed / advanced).
   const startToday = new Date();
   startToday.setHours(0, 0, 0, 0);
   const endToday = new Date();
@@ -22,9 +23,9 @@ export async function GET() {
   const todayStr = new Date().toISOString().slice(0, 10);
   const scope = role === "TELECALLER" ? { OR: [{ assignedToId: userId }, { createdById: userId }] } : {};
 
-  const [pending, renewalDue] = await Promise.all([
+  const [reminders, renewalDue] = await Promise.all([
     prisma.ad.findMany({
-      where: { ...scope, status: "PENDING", reminderDate: { lte: endToday } },
+      where: { ...scope, status: { in: ["PENDING", "FOLLOW_UP"] }, reminderDate: { lte: endToday } },
       include: { client: { select: { name: true } } },
     }),
     prisma.ad.findMany({
@@ -33,9 +34,12 @@ export async function GET() {
     }),
   ]);
 
-  type Cand = { id: string; title: string; clientName: string; kind: "PAYMENT" | "RENEWAL"; end: Date | null };
+  type Cand = { id: string; title: string; clientName: string; kind: "PAYMENT" | "FOLLOWUP" | "RENEWAL"; end: Date | null };
   const cands: Cand[] = [
-    ...pending.map((d) => ({ id: d.id, title: d.title, clientName: d.client.name, kind: "PAYMENT" as const, end: d.endDate })),
+    ...reminders.map((d) => ({
+      id: d.id, title: d.title, clientName: d.client.name,
+      kind: (d.status === "PENDING" ? "PAYMENT" : "FOLLOWUP") as "PAYMENT" | "FOLLOWUP", end: d.endDate,
+    })),
     ...renewalDue.map((d) => ({ id: d.id, title: d.title, clientName: d.client.name, kind: "RENEWAL" as const, end: d.endDate })),
   ];
 
@@ -54,9 +58,11 @@ export async function GET() {
       .map((c) => ({
         userId,
         type: "REMINDER" as const,
-        title: c.kind === "PAYMENT" ? `${c.clientName} — payment reminder` : `${c.clientName} — renewal due`,
-        body: c.kind === "PAYMENT"
-          ? `${c.title}: awaiting payment`
+        title: c.kind === "PAYMENT" ? `${c.clientName} — payment reminder`
+          : c.kind === "FOLLOWUP" ? `${c.clientName} — follow-up reminder`
+          : `${c.clientName} — renewal due`,
+        body: c.kind === "PAYMENT" ? `${c.title}: awaiting payment`
+          : c.kind === "FOLLOWUP" ? `${c.title}: follow up due`
           : `${c.title} ended ${c.end ? formatDate(c.end) : ""}`.trim(),
         link: `${adsPath}?deal=${c.id}&d=${todayStr}`,
       }));

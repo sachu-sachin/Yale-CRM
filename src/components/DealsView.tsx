@@ -63,7 +63,7 @@ const defaultSub = (tab: string) => SUB_TABS[tab]?.[0]?.key ?? "";
 
 const emptyForm = {
   phone: "", name: "", email: "", city: "",
-  title: "", amount: "", source: "WALKIN", status: "NOT_CLOSED",
+  title: "", amount: "0", source: "WALKIN", status: "NOT_CLOSED",
   notes: "", startDate: "", endDate: "", durationDays: "", reminderDate: "", assignedToId: "",
 };
 
@@ -161,11 +161,12 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     </th>
   );
 
-  const handlePhoneChange = (phone: string) => {
+  const handlePhoneChange = (raw: string) => {
+    const phone = raw.replace(/\D/g, "").slice(0, 10); // digits only, max 10
     setForm((f) => ({ ...f, phone }));
     setExisting(null);
     if (lookupTimer.current) clearTimeout(lookupTimer.current);
-    if (phone.replace(/\D/g, "").length < 4) { setLookupLoading(false); return; }
+    if (phone.length < 4) { setLookupLoading(false); return; }
     setLookupLoading(true);
     lookupTimer.current = setTimeout(async () => {
       try {
@@ -240,13 +241,19 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // New deals must have a valid 10-digit mobile (phone is locked on edit/renew).
+    if (!editingId && !renewing && form.phone.replace(/\D/g, "").length !== 10) {
+      alert("Enter a valid 10-digit mobile number.");
+      return;
+    }
     setSaving(true);
     const dates: Record<string, string> = {};
     if (form.status === "PAID") {
       if (form.startDate) dates.closeDate = form.startDate;
       if (form.endDate) dates.endDate = form.endDate;
     }
-    const reminder = form.status === "PENDING" ? { reminderDate: form.reminderDate || null } : {};
+    const reminder = form.status === "PENDING" || form.status === "FOLLOW_UP"
+      ? { reminderDate: form.reminderDate || null } : {};
     let res: Response;
     if (editingId) {
       res = await fetch(`/api/ads/${editingId}`, {
@@ -468,8 +475,9 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Phone *</label>
                     <div className="relative">
-                      <input type="text" value={form.phone} disabled={!!editingId || renewing}
-                        onChange={(e) => handlePhoneChange(e.target.value)} placeholder="Type to auto-fill…"
+                      <input type="tel" inputMode="numeric" maxLength={10} pattern="\d{10}"
+                        title="Enter a 10-digit mobile number" value={form.phone} disabled={!!editingId || renewing}
+                        onChange={(e) => handlePhoneChange(e.target.value)} placeholder="10-digit mobile"
                         className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" required />
                       {lookupLoading && <Loader2 size={16} className="animate-spin text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />}
                     </div>
@@ -574,13 +582,19 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   </div>
                 )}
 
-                {/* Reminder — only for Waiting for payment (PENDING) */}
-                {form.status === "PENDING" && (
+                {/* Reminder — for Waiting for payment (PENDING) and Follow-up */}
+                {(form.status === "PENDING" || form.status === "FOLLOW_UP") && (
                   <div className="animate-fade-in">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Payment reminder date</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      {form.status === "PENDING" ? "Payment reminder date" : "Follow-up reminder date"}
+                    </label>
                     <input type="date" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
-                    <p className="text-xs text-slate-400 mt-1">You&apos;ll get a daily reminder from this date until it&apos;s paid.</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {form.status === "PENDING"
+                        ? "You'll get a daily reminder from this date until it's paid."
+                        : "You'll get a daily reminder from this date until the follow-up moves on."}
+                    </p>
                   </div>
                 )}
 
