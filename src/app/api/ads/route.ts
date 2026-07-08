@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import type { DealStatus, LeadSource } from "@prisma/client";
-import { phaseForSeq, MAX_DEAL_AMOUNT, type AdPhaseValue } from "@/lib/utils";
+import { phaseForSeq, MAX_DEAL_AMOUNT, RENEWAL_GRACE_DAYS, type AdPhaseValue } from "@/lib/utils";
 
 const SORTABLE = new Set([
   "closeDate", "endDate", "amount", "status", "phase", "title", "createdAt", "reminderDate",
@@ -19,53 +19,60 @@ export async function GET(req: NextRequest) {
 
   const phase = searchParams.get("phase");
   const status = searchParams.get("status");
-  const paidState = searchParams.get("paidState"); // Closed sub-tabs: active | waiting
+  const view = searchParams.get("view"); // phase-tab view: closed | renewal:paid|waiting|finished | regular:...
   const source = searchParams.get("source");
   const assignedTo = searchParams.get("assignedTo");
   const search = (searchParams.get("search") || "").trim();
   const from = searchParams.get("from");
   const to = searchParams.get("to");
-  const endOn = searchParams.get("endOn"); // ads whose END date is this specific day (Renewal filter)
-  const dueRenewal = searchParams.get("dueRenewal"); // PAID deals ending within 1 day / already expired
   const sortBy = searchParams.get("sortBy") || "closeDate";
   const sortDir = searchParams.get("sortDir") === "asc" ? "asc" : "desc";
 
   const where: Record<string, unknown> = {};
   const and: Record<string, unknown>[] = [];
-  const startToday = new Date();
-  startToday.setHours(0, 0, 0, 0);
 
   if (role === "TELECALLER") and.push({ OR: [{ assignedToId: userId }, { createdById: userId }] });
   else if (assignedTo) where.assignedToId = assignedTo;
-  if (phase) where.phase = phase;
   if (source) where.source = source;
 
-  if (paidState === "waiting") {
-    // Closed ▸ Waiting = paid, term expired, not yet renewed
-    where.status = "PAID";
-    where.renewedAt = null;
-    where.endDate = { lt: startToday };
-  } else if (paidState === "active") {
-    // Closed ▸ Active = paid and NOT renewal-due (future/no end, or already renewed)
-    where.status = "PAID";
-    and.push({ OR: [{ endDate: null }, { endDate: { gte: startToday } }, { renewedAt: { not: null } }] });
-  } else if (status) {
-    where.status = status;
-  }
+  // Lifecycle date bounds: a deal is renewal-"due" from 1 day before its end (soon) through the
+  // grace window; older than graceStart (unrenewed) it is "expired" → Finished.
+  const soon = new Date(); soon.setDate(soon.getDate() + 1); soon.setHours(23, 59, 59, 999);
+  const graceStart = new Date(); graceStart.setDate(graceStart.getDate() - RENEWAL_GRACE_DAYS); graceStart.setHours(0, 0, 0, 0);
 
-  if (!paidState) {
-    if (endOn) {
-      const s = new Date(endOn); s.setHours(0, 0, 0, 0);
-      const e = new Date(endOn); e.setHours(23, 59, 59, 999);
-      where.endDate = { gte: s, lte: e };
-    } else if (dueRenewal) {
-      const limit = new Date();
-      limit.setDate(limit.getDate() + 1);
-      limit.setHours(23, 59, 59, 999);
-      where.status = "PAID";
-      where.renewedAt = null;
-      where.endDate = { lte: limit };
-    } else if (from || to) {
+  // Reusable lifecycle-state fragments (for the current, non-superseded deal unless noted).
+  const activePaid = { status: "PAID", renewedAt: null, OR: [{ endDate: null }, { endDate: { gt: soon } }] };
+  const dueOf = (phases: string[]) => ({ phase: { in: phases }, status: "PAID", renewedAt: null, endDate: { lte: soon, gte: graceStart } });
+  const pendingOf = (phases: string[]) => ({ phase: { in: phases }, status: "PENDING", renewedAt: null });
+  const expiredOf = (phases: string[]) => ({ phase: { in: phases }, status: "PAID", renewedAt: null, endDate: { lt: graceStart } });
+  const supersededOf = (phases: string[]) => ({ phase: { in: phases }, renewedAt: { not: null } });
+
+  if (view === "followups:followup") {
+    // Pre-conversion follow-ups only (exclude pending renewals, which carry a phase).
+    and.push({ status: "FOLLOW_UP", phase: null });
+  } else if (view === "followups:waiting") {
+    and.push({ status: "PENDING", phase: null });
+  } else if (view === "closed") {
+    // First conversion, not yet due for its first renewal.
+    and.push({ phase: "CLOSED", ...activePaid });
+  } else if (view === "renewal:paid") {
+    and.push({ phase: "RENEWAL", ...activePaid });
+  } else if (view === "renewal:waiting") {
+    // Due first-conversion or renewal deals, plus pending (waiting-for-payment) renewals.
+    and.push({ OR: [dueOf(["CLOSED", "RENEWAL"]), pendingOf(["RENEWAL"])] });
+  } else if (view === "renewal:finished") {
+    and.push({ OR: [supersededOf(["CLOSED", "RENEWAL"]), expiredOf(["CLOSED", "RENEWAL"])] });
+  } else if (view === "regular:paid") {
+    and.push({ phase: "REGULAR", ...activePaid });
+  } else if (view === "regular:waiting") {
+    and.push({ OR: [dueOf(["REGULAR"]), pendingOf(["REGULAR"])] });
+  } else if (view === "regular:finished") {
+    and.push({ OR: [supersededOf(["REGULAR"]), expiredOf(["REGULAR"])] });
+  } else {
+    // All Deals / Follow-ups: plain phase/status/date-range filters.
+    if (phase) where.phase = phase;
+    if (status) where.status = status;
+    if (from || to) {
       const range: Record<string, Date> = {};
       if (from) range.gte = new Date(from);
       if (to) { const t = new Date(to); t.setHours(23, 59, 59, 999); range.lte = t; }
@@ -110,7 +117,7 @@ export async function POST(req: NextRequest) {
   const {
     phone, name, email, city, title, amount, status, source,
     serviceInterest, budgetRange, closeDate, durationDays, endDate,
-    reminderDate, assignedToId, notes,
+    reminderDate, assignedToId, notes, renewalOfId,
   } = body;
 
   if (!phone || !name || !title) {
@@ -131,8 +138,21 @@ export async function POST(req: NextRequest) {
     end = new Date(close);
     end.setDate(end.getDate() + days);
   }
-  if (dealStatus === "PAID" && end && end < close) {
+  // A dated term can never end before it starts (applies to any status, not just PAID).
+  if (end && end < close) {
     return NextResponse.json({ error: "End date must be on or after the start date" }, { status: 400 });
+  }
+
+  // Renewal: the new deal continues the source deal's chain (next position), even if created PENDING.
+  let renewalSource: { id: string; clientId: string; seq: number | null } | null = null;
+  if (renewalOfId) {
+    renewalSource = await prisma.ad.findUnique({
+      where: { id: String(renewalOfId) },
+      select: { id: true, clientId: true, seq: true },
+    });
+    if (!renewalSource) {
+      return NextResponse.json({ error: "renewalOfId does not reference a valid deal." }, { status: 400 });
+    }
   }
 
   const client = await prisma.client.upsert({
@@ -141,11 +161,22 @@ export async function POST(req: NextRequest) {
     create: { name, phone, email: email || null, city: city || null, createdById: userId },
   });
 
+  // Default reminder for a pending (waiting-for-payment) renewal: 1 day before its end date.
+  let reminder: Date | null = reminderDate ? new Date(reminderDate) : null;
+  if (!reminder && renewalSource && dealStatus === "PENDING" && end) {
+    reminder = new Date(end);
+    reminder.setDate(reminder.getDate() - 1);
+  }
+
   // Compute phase + create the deal + log the initial stage in one transaction (avoids seq races).
   const ad = await prisma.$transaction(async (tx) => {
     let phase: AdPhaseValue | null = null;
     let seq: number | null = null;
-    if (dealStatus === "PAID") {
+    if (renewalSource) {
+      // Renewals continue the chain by position, whether created Paid or Waiting-for-payment.
+      seq = (renewalSource.seq ?? 1) + 1;
+      phase = phaseForSeq(seq);
+    } else if (dealStatus === "PAID") {
       const paidCount = await tx.ad.count({ where: { clientId: client.id, status: "PAID" } });
       seq = paidCount + 1;
       phase = phaseForSeq(seq);
@@ -165,7 +196,7 @@ export async function POST(req: NextRequest) {
         closeDate: close,
         endDate: end,
         durationDays: days,
-        reminderDate: reminderDate ? new Date(reminderDate) : null,
+        reminderDate: reminder,
         notes: notes || null,
         assignedToId: role === "TELECALLER" ? userId : assignedToId || null,
         createdById: userId,
@@ -178,6 +209,13 @@ export async function POST(req: NextRequest) {
     await tx.dealStageEvent.create({
       data: { adId: created.id, fromStatus: null, toStatus: dealStatus, changedById: userId },
     });
+    // Atomically supersede the source deal → it moves to Finished and leaves the active queue.
+    if (renewalSource) {
+      await tx.ad.update({
+        where: { id: renewalSource.id },
+        data: { renewedAt: new Date(), supersededById: created.id },
+      });
+    }
     return created;
   });
 

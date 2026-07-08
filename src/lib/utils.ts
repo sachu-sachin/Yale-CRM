@@ -75,9 +75,24 @@ export const dealStatusColors: Record<string, string> = {
   IRRELEVANT: "bg-slate-100 text-slate-600",
 };
 
+/** End of tomorrow — the "1 day before end date" boundary at which a deal becomes renewal-due. */
+function renewalSoon(): number {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+/** Start of (today − grace) — before this, an unrenewed deal is Finished (expired), not "due". */
+function renewalGraceStart(): number {
+  const d = new Date();
+  d.setDate(d.getDate() - RENEWAL_GRACE_DAYS);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 /**
- * A PAID deal whose end date has passed (and hasn't been renewed) is shown as
- * "waiting for payment" (renewal due) — display only, the stored status stays PAID.
+ * A PAID, un-renewed deal is "renewal due" from 1 day before its end date through the grace
+ * window (kept in Waiting-for-payment). Display only — the stored status stays PAID.
  */
 export function isRenewalDue(
   status: string,
@@ -85,7 +100,18 @@ export function isRenewalDue(
   renewedAt?: string | Date | null
 ): boolean {
   if (status !== "PAID" || !endDate || renewedAt) return false;
-  return new Date(endDate).getTime() < Date.now();
+  const t = new Date(endDate).getTime();
+  return t <= renewalSoon() && t >= renewalGraceStart();
+}
+
+/** A PAID, un-renewed deal whose end date is more than the grace period ago → Finished (view-only). */
+export function isRenewalExpired(
+  status: string,
+  endDate: string | Date | null,
+  renewedAt?: string | Date | null
+): boolean {
+  if (status !== "PAID" || !endDate || renewedAt) return false;
+  return new Date(endDate).getTime() < renewalGraceStart();
 }
 
 // ---- Pipeline stage machine (forward-only for telecallers; admins override pre-PAID) ----
@@ -121,13 +147,24 @@ export function isTransitionAllowed(from: string, to: string, isAdmin: boolean):
   return (ALLOWED_TRANSITIONS[from] || []).includes(to);
 }
 
-// ---- Ad phase tier (auto-derived from how many times a client has paid) ----
+// ---- Ad phase tier (auto-derived from a deal's position in the client's renewal chain) ----
+// seq = 1-indexed chain position: initial paid deal = 1, each renewal +1 (set even when a
+// renewal is created as PENDING). Renewal tag R#(seq-1): seq2 → R#1, seq3 → R#2, seq4 → R#3…
 export type AdPhaseValue = "CLOSED" | "RENEWAL" | "REGULAR";
 export function phaseForSeq(seq: number): AdPhaseValue {
   if (seq <= 1) return "CLOSED";
-  if (seq === 2) return "RENEWAL";
-  return "REGULAR";
+  if (seq <= 3) return "RENEWAL"; // seq 2–3 → R#1, R#2
+  return "REGULAR"; // seq 4+ → R#3 onward
 }
+
+/** Human renewal tag for a chain position, e.g. seq 2 → "R#1". Initial deal (seq ≤ 1) has none. */
+export function renewalTag(seq: number | null | undefined): string {
+  return seq && seq > 1 ? `R#${seq - 1}` : "";
+}
+
+// A renewal-due deal stays chased (Waiting) for this many days past its end date, then it is
+// considered Finished (expired, unrenewed) and shown read-only.
+export const RENEWAL_GRACE_DAYS = 30;
 
 // Sanity bound for a deal amount (₹0 – ₹10 crore). Rejects negatives and absurd values.
 export const MAX_DEAL_AMOUNT = 100_000_000;
