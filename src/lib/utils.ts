@@ -88,7 +88,7 @@ export function isRenewalDue(
   return new Date(endDate).getTime() < Date.now();
 }
 
-// ---- Pipeline stage machine (forward-only for telecallers; admins override) ----
+// ---- Pipeline stage machine (forward-only for telecallers; admins override pre-PAID) ----
 // REPEATED is intentionally omitted from the pipeline UI (dormant enum value).
 export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   NOT_CLOSED: ["FOLLOW_UP", "PENDING", "PAID", "IRRELEVANT"],
@@ -99,21 +99,38 @@ export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   REPEATED: [],
 };
 
+// PAID is final for EVERYONE (including admins): a conversion can only move on via renew,
+// which creates a fresh deal. Prevents a paid deal being walked back into the pipeline.
+const TERMINAL_FOR_ALL = new Set(["PAID"]);
+
 // Statuses an admin may pick when overriding (dormant REPEATED excluded).
 const OVERRIDE_STATUSES = ["NOT_CLOSED", "FOLLOW_UP", "PENDING", "PAID", "IRRELEVANT"];
 
 /** Statuses selectable from `current` (excludes current itself). */
 export function allowedNextStatuses(current: string, isAdmin: boolean): string[] {
+  if (TERMINAL_FOR_ALL.has(current)) return []; // e.g. PAID — renew is the only way onward
   if (isAdmin) return OVERRIDE_STATUSES.filter((s) => s !== current);
   return ALLOWED_TRANSITIONS[current] || [];
 }
 
 /** Server-side guard: is moving from→to permitted for this role? */
 export function isTransitionAllowed(from: string, to: string, isAdmin: boolean): boolean {
-  if (isAdmin) return true;
   if (from === to) return true;
+  if (TERMINAL_FOR_ALL.has(from)) return false; // PAID is final, even for admin
+  if (isAdmin) return true;
   return (ALLOWED_TRANSITIONS[from] || []).includes(to);
 }
+
+// ---- Ad phase tier (auto-derived from how many times a client has paid) ----
+export type AdPhaseValue = "CLOSED" | "RENEWAL" | "REGULAR";
+export function phaseForSeq(seq: number): AdPhaseValue {
+  if (seq <= 1) return "CLOSED";
+  if (seq === 2) return "RENEWAL";
+  return "REGULAR";
+}
+
+// Sanity bound for a deal amount (₹0 – ₹10 crore). Rejects negatives and absurd values.
+export const MAX_DEAL_AMOUNT = 100_000_000;
 
 // ---- Telecaller incentive (monthly, on PAID revenue) ----
 // First ₹2.5L = base salary (₹0 incentive). First full lakh above → ₹4,500.

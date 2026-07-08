@@ -239,6 +239,9 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
     return Array.from(new Set([base, ...allowedNextStatuses(base, isAdmin)]));
   }, [editOrigin, isAdmin, renewing]);
 
+  // A telecaller cannot change amount or start date once a deal is Paid (server enforces this too).
+  const lockPaidMoney = !isAdmin && !!editingId && editOrigin === "PAID";
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     // New deals must have a valid 10-digit mobile (phone is locked on edit/renew).
@@ -554,8 +557,8 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹)</label>
-                    <input type="number" min="0" step="any" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                    <input type="number" min="0" step="any" value={form.amount} disabled={lockPaidMoney} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
@@ -571,8 +574,8 @@ export default function DealsView({ isAdmin }: { isAdmin: boolean }) {
                   <div className="grid grid-cols-2 gap-4 animate-fade-in">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Start date</label>
-                      <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30" />
+                      <input type="date" value={form.startDate} disabled={lockPaidMoney} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:bg-slate-50 disabled:text-slate-500" />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">End date</label>

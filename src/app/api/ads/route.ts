@@ -2,14 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import type { DealStatus, LeadSource } from "@prisma/client";
-
-type AdPhase = "CLOSED" | "RENEWAL" | "REGULAR";
-
-function phaseForSeq(seq: number): AdPhase {
-  if (seq <= 1) return "CLOSED";
-  if (seq === 2) return "RENEWAL";
-  return "REGULAR";
-}
+import { phaseForSeq, MAX_DEAL_AMOUNT, type AdPhaseValue } from "@/lib/utils";
 
 const SORTABLE = new Set([
   "closeDate", "endDate", "amount", "status", "phase", "title", "createdAt", "reminderDate",
@@ -127,6 +120,11 @@ export async function POST(req: NextRequest) {
   const dealStatus = (status || "NOT_CLOSED") as DealStatus;
   const close = closeDate ? new Date(closeDate) : new Date();
 
+  const amt = amount != null ? parseFloat(String(amount)) : 0;
+  if (!Number.isFinite(amt) || amt < 0 || amt > MAX_DEAL_AMOUNT) {
+    return NextResponse.json({ error: "Amount must be between 0 and 10,00,00,000." }, { status: 400 });
+  }
+
   let end: Date | null = endDate ? new Date(endDate) : null;
   const days = durationDays ? parseInt(String(durationDays), 10) : null;
   if (!end && days && days > 0) {
@@ -145,7 +143,7 @@ export async function POST(req: NextRequest) {
 
   // Compute phase + create the deal + log the initial stage in one transaction (avoids seq races).
   const ad = await prisma.$transaction(async (tx) => {
-    let phase: AdPhase | null = null;
+    let phase: AdPhaseValue | null = null;
     let seq: number | null = null;
     if (dealStatus === "PAID") {
       const paidCount = await tx.ad.count({ where: { clientId: client.id, status: "PAID" } });
@@ -156,7 +154,7 @@ export async function POST(req: NextRequest) {
       data: {
         clientId: client.id,
         title,
-        amount: amount != null ? parseFloat(String(amount)) : 0,
+        amount: amt,
         status: dealStatus,
         source: (source || "OTHER") as LeadSource,
         serviceInterest: serviceInterest || [],
